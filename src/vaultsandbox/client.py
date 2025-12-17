@@ -1,0 +1,551 @@
+"""VaultSandboxClient - Main entry point for VaultSandbox SDK."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+from .constants import (
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_POLLING_INTERVAL_MS,
+    DEFAULT_POLLING_MAX_BACKOFF_MS,
+    DEFAULT_RETRY_DELAY_MS,
+    DEFAULT_RETRY_STATUS_CODES,
+    DEFAULT_SSE_MAX_RECONNECT_ATTEMPTS,
+    DEFAULT_SSE_RECONNECT_INTERVAL_MS,
+    DEFAULT_TIMEOUT_MS,
+)
+from .crypto import (
+    Keypair,
+    derive_public_key_from_secret,
+    from_base64,
+    generate_keypair,
+    to_base64,
+    validate_keypair,
+)
+from .crypto.constants import MLKEM768_PUBLIC_KEY_SIZE, MLKEM768_SECRET_KEY_SIZE
+from .email import Email
+from .errors import (
+    InboxAlreadyExistsError,
+    InboxNotFoundError,
+    InvalidImportDataError,
+)
+from .http import ApiClient
+from .inbox import Inbox
+from .strategies import DeliveryStrategy, PollingStrategy, SSEStrategy
+from .types import (
+    ClientConfig,
+    CreateInboxOptions,
+    DeliveryStrategyType,
+    ExportedInbox,
+    PollingConfig,
+    ServerInfo,
+    SSEConfig,
+)
+from .utils import parse_iso_timestamp
+
+logger = logging.getLogger("vaultsandbox")
+
+
+# Type alias for InboxMonitor callbacks that receive both inbox and email
+InboxEmailCallback = Callable[[Inbox, Email], Any]
+
+
+class InboxMonitor:
+    """Monitor multiple inboxes for new emails.
+
+    This class provides an event-based interface for monitoring
+    multiple inboxes simultaneously.
+
+    Example:
+        ```python
+        monitor = client.monitor_inboxes([inbox1, inbox2])
+
+        @monitor.on_email
+        async def handle_email(inbox: Inbox, email: Email):
+            print(f"New email in {inbox.email_address}: {email.subject}")
+
+        await monitor.start()
+        ```
+    """
+
+    def __init__(
+        self,
+        inboxes: list[Inbox],
+        strategy: DeliveryStrategy,
+    ) -> None:
+        """Initialize the inbox monitor.
+
+        Args:
+            inboxes: List of inboxes to monitor.
+            strategy: The delivery strategy to use.
+        """
+        self._inboxes = inboxes
+        self._strategy = strategy
+        self._callbacks: list[InboxEmailCallback] = []
+        self._subscriptions: list[Any] = []
+        self._started = False
+
+    def on_email(self, callback: InboxEmailCallback) -> InboxMonitor:
+        """Register a callback for new emails.
+
+        Args:
+            callback: Function to call when new emails arrive.
+                      Receives (inbox, email) as arguments.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._callbacks.append(callback)
+        return self
+
+    async def start(self) -> InboxMonitor:
+        """Start monitoring inboxes.
+
+        Returns:
+            Self for method chaining.
+        """
+        if self._started:
+            return self
+
+        for inbox in self._inboxes:
+            # Create a closure to capture the inbox reference
+            def make_handler(inbox_ref: Inbox) -> Callable[[Email], Any]:
+                async def handle_email(email: Email) -> None:
+                    for callback in self._callbacks:
+                        try:
+                            result = callback(inbox_ref, email)
+                            if asyncio.iscoroutine(result):
+                                await result
+                        except Exception as e:
+                            logger.debug("Error in email callback: %s", e, exc_info=True)
+
+                return handle_email
+
+            handler = make_handler(inbox)
+            subscription = await inbox.on_new_email(handler)
+            self._subscriptions.append(subscription)
+
+        self._started = True
+        return self
+
+    async def unsubscribe(self) -> None:
+        """Stop monitoring and unsubscribe from all inboxes."""
+        for subscription in self._subscriptions:
+            await self._strategy.unsubscribe(subscription)
+        self._subscriptions.clear()
+        self._started = False
+
+
+class VaultSandboxClient:
+    """Main client for interacting with VaultSandbox API.
+
+    This is the primary entry point for the VaultSandbox SDK.
+    It manages inbox creation, delivery strategies, and server communication.
+
+    Example:
+        ```python
+        async with VaultSandboxClient(api_key="your-api-key") as client:
+            inbox = await client.create_inbox()
+            email = await inbox.wait_for_email()
+            print(f"Received: {email.subject}")
+        ```
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        base_url: str = "https://smtp.vaultsandbox.com",
+        timeout: int = DEFAULT_TIMEOUT_MS,
+        max_retries: int = DEFAULT_MAX_RETRIES,
+        retry_delay: int = DEFAULT_RETRY_DELAY_MS,
+        retry_on_status_codes: tuple[int, ...] | None = None,
+        strategy: DeliveryStrategyType = DeliveryStrategyType.AUTO,
+        polling_interval: int = DEFAULT_POLLING_INTERVAL_MS,
+        polling_max_backoff: int = DEFAULT_POLLING_MAX_BACKOFF_MS,
+        sse_reconnect_interval: int = DEFAULT_SSE_RECONNECT_INTERVAL_MS,
+        sse_max_reconnect_attempts: int = DEFAULT_SSE_MAX_RECONNECT_ATTEMPTS,
+    ) -> None:
+        """Initialize the VaultSandbox client.
+
+        Args:
+            api_key: API key for authentication.
+            base_url: Base URL for the API server.
+            timeout: HTTP request timeout in milliseconds.
+            max_retries: Maximum number of retry attempts.
+            retry_delay: Initial retry delay in milliseconds.
+            retry_on_status_codes: HTTP status codes that trigger retries.
+                Default: (408, 429, 500, 502, 503, 504)
+            strategy: Delivery strategy type (sse, polling, or auto).
+            polling_interval: Polling interval in milliseconds (default: 2000).
+            polling_max_backoff: Maximum backoff delay in milliseconds (default: 30000).
+            sse_reconnect_interval: SSE reconnection interval in milliseconds (default: 5000).
+            sse_max_reconnect_attempts: Maximum SSE reconnection attempts (default: 10).
+        """
+        self._config = ClientConfig(
+            api_key=api_key,
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            retry_on_status_codes=retry_on_status_codes or DEFAULT_RETRY_STATUS_CODES,
+            strategy=strategy,
+        )
+        # Store strategy configuration
+        self._polling_config = PollingConfig(
+            initial_interval=polling_interval,
+            max_backoff=polling_max_backoff,
+        )
+        self._sse_config = SSEConfig(
+            reconnect_interval=sse_reconnect_interval,
+            max_reconnect_attempts=sse_max_reconnect_attempts,
+        )
+        self._api_client = ApiClient(self._config)
+        self._strategy: DeliveryStrategy | None = None
+        self._server_info: ServerInfo | None = None
+        self._inboxes: dict[str, Inbox] = {}
+        self._initialized = False
+
+    async def __aenter__(self) -> VaultSandboxClient:
+        """Enter async context manager."""
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Exit async context manager."""
+        await self.close()
+
+    async def _ensure_initialized(self) -> None:
+        """Initialize the client if not already done."""
+        if self._initialized:
+            return
+
+        # Fetch server info
+        self._server_info = await self._api_client.get_server_info()
+
+        # Create delivery strategy
+        self._strategy = self._create_strategy()
+
+        self._initialized = True
+
+    def _create_strategy(self) -> DeliveryStrategy:
+        """Create the delivery strategy based on configuration.
+
+        Returns:
+            A DeliveryStrategy instance.
+        """
+        strategy_type = self._config.strategy
+
+        # Auto defaults to SSE (always available on server)
+        if strategy_type == DeliveryStrategyType.AUTO:
+            strategy_type = DeliveryStrategyType.SSE
+
+        if strategy_type == DeliveryStrategyType.SSE:
+            return SSEStrategy(self._api_client, self._sse_config)
+        else:
+            return PollingStrategy(self._api_client, self._polling_config)
+
+    async def close(self) -> None:
+        """Close the client and release all resources.
+
+        Note: This does NOT delete inboxes from the server. Inboxes will
+        expire based on their TTL. Use delete_all_inboxes() to explicitly
+        delete inboxes.
+        """
+        # Clear local inbox references (do NOT delete from server)
+        self._inboxes.clear()
+
+        # Close strategy
+        if self._strategy is not None:
+            await self._strategy.close()
+            self._strategy = None
+
+        # Close API client
+        await self._api_client.close()
+
+        self._initialized = False
+
+    async def check_key(self) -> bool:
+        """Validate the API key.
+
+        Returns:
+            True if the API key is valid.
+        """
+        return await self._api_client.check_key()
+
+    async def get_server_info(self) -> ServerInfo:
+        """Get server information and capabilities.
+
+        Returns:
+            ServerInfo with cryptographic configuration.
+        """
+        await self._ensure_initialized()
+        if self._server_info is None:
+            raise RuntimeError("Client not initialized. Call create_inbox first.")
+        return self._server_info
+
+    async def create_inbox(
+        self,
+        options: CreateInboxOptions | None = None,
+    ) -> Inbox:
+        """Create a new temporary email inbox.
+
+        Args:
+            options: Options for inbox creation (TTL, email address).
+
+        Returns:
+            A new Inbox instance.
+        """
+        await self._ensure_initialized()
+        if self._strategy is None:
+            raise RuntimeError("Client not initialized. Call create_inbox first.")
+
+        options = options or CreateInboxOptions()
+
+        # Generate keypair
+        keypair = generate_keypair()
+
+        # Create inbox on server
+        inbox_data = await self._api_client.create_inbox(
+            keypair.public_key_b64,
+            ttl=options.ttl,
+            email_address=options.email_address,
+        )
+
+        # Parse expires_at timestamp
+        expires_at = parse_iso_timestamp(inbox_data.expires_at)
+
+        inbox = Inbox(
+            email_address=inbox_data.email_address,
+            expires_at=expires_at,
+            inbox_hash=inbox_data.inbox_hash,
+            server_sig_pk=inbox_data.server_sig_pk,
+            _keypair=keypair,
+            _api_client=self._api_client,
+            _strategy=self._strategy,
+        )
+
+        self._inboxes[inbox.email_address] = inbox
+        return inbox
+
+    async def delete_all_inboxes(self) -> int:
+        """Delete all inboxes for the API key.
+
+        Returns:
+            Number of inboxes deleted.
+        """
+        # Clear local inbox references
+        self._inboxes.clear()
+
+        return await self._api_client.delete_all_inboxes()
+
+    def monitor_inboxes(self, inboxes: list[Inbox]) -> InboxMonitor:
+        """Create a monitor for multiple inboxes.
+
+        Args:
+            inboxes: List of inboxes to monitor.
+
+        Returns:
+            An InboxMonitor instance.
+        """
+        if self._strategy is None:
+            raise RuntimeError("Client not initialized. Call create_inbox first.")
+        return InboxMonitor(inboxes, self._strategy)
+
+    def export_inbox(self, inbox_or_email: Inbox | str) -> ExportedInbox:
+        """Export inbox data for persistence/sharing.
+
+        WARNING: Exported data contains private keys. Handle securely.
+
+        Args:
+            inbox_or_email: The inbox to export, or its email address string.
+
+        Returns:
+            ExportedInbox with keypair and metadata.
+
+        Raises:
+            InboxNotFoundError: If the inbox is not found in the client.
+        """
+        if isinstance(inbox_or_email, str):
+            email_address = inbox_or_email
+            inbox = self._inboxes.get(email_address)
+            if inbox is None:
+                raise InboxNotFoundError(f"Inbox not found: {email_address}")
+        else:
+            inbox = inbox_or_email
+
+        return inbox.export()
+
+    async def export_inbox_to_file(
+        self, inbox_or_email: Inbox | str, file_path: str | Path
+    ) -> None:
+        """Export inbox data to a JSON file.
+
+        WARNING: Exported data contains private keys. Handle securely.
+
+        Args:
+            inbox_or_email: The inbox to export, or its email address string.
+            file_path: Path to the output file.
+
+        Raises:
+            InboxNotFoundError: If the inbox is not found in the client.
+        """
+        exported = self.export_inbox(inbox_or_email)
+        data = {
+            "emailAddress": exported.email_address,
+            "expiresAt": exported.expires_at,
+            "inboxHash": exported.inbox_hash,
+            "serverSigPk": exported.server_sig_pk,
+            "publicKeyB64": exported.public_key_b64,
+            "secretKeyB64": exported.secret_key_b64,
+            "exportedAt": exported.exported_at,
+        }
+
+        path = Path(file_path)
+        path.write_text(json.dumps(data, indent=2))
+
+    async def import_inbox(self, data: ExportedInbox) -> Inbox:
+        """Import an inbox from exported data.
+
+        Args:
+            data: The exported inbox data.
+
+        Returns:
+            The imported Inbox instance.
+
+        Raises:
+            InboxAlreadyExistsError: If the inbox already exists.
+            InvalidImportDataError: If the import data is invalid.
+        """
+        await self._ensure_initialized()
+        if self._strategy is None:
+            raise RuntimeError("Client not initialized. Call create_inbox first.")
+        if self._server_info is None:
+            raise RuntimeError("Client not initialized. Call create_inbox first.")
+
+        # Validate import data
+        self._validate_import_data(data)
+
+        # Check if inbox already exists
+        if data.email_address in self._inboxes:
+            raise InboxAlreadyExistsError(f"Inbox {data.email_address} already exists")
+
+        # Reconstruct keypair
+        public_key = from_base64(data.public_key_b64)
+        secret_key = from_base64(data.secret_key_b64)
+        keypair = Keypair(
+            public_key=public_key,
+            secret_key=secret_key,
+            public_key_b64=to_base64(public_key),
+        )
+
+        # Validate keypair
+        if not validate_keypair(keypair):
+            raise InvalidImportDataError("Invalid keypair in import data")
+
+        # Verify public key can be derived from secret key
+        derived_pk = derive_public_key_from_secret(secret_key)
+        if derived_pk != public_key:
+            raise InvalidImportDataError("Public key does not match secret key")
+
+        # Parse expires_at timestamp
+        expires_at = parse_iso_timestamp(data.expires_at)
+
+        inbox = Inbox(
+            email_address=data.email_address,
+            expires_at=expires_at,
+            inbox_hash=data.inbox_hash,
+            server_sig_pk=data.server_sig_pk,
+            _keypair=keypair,
+            _api_client=self._api_client,
+            _strategy=self._strategy,
+        )
+
+        self._inboxes[inbox.email_address] = inbox
+        return inbox
+
+    async def import_inbox_from_file(self, file_path: str | Path) -> Inbox:
+        """Import an inbox from a JSON file.
+
+        Args:
+            file_path: Path to the import file.
+
+        Returns:
+            The imported Inbox instance.
+        """
+        path = Path(file_path)
+        data = json.loads(path.read_text())
+
+        exported = ExportedInbox(
+            email_address=data["emailAddress"],
+            expires_at=data["expiresAt"],
+            inbox_hash=data["inboxHash"],
+            server_sig_pk=data["serverSigPk"],
+            public_key_b64=data["publicKeyB64"],
+            secret_key_b64=data["secretKeyB64"],
+            exported_at=data.get("exportedAt", ""),
+        )
+
+        return await self.import_inbox(exported)
+
+    def _validate_import_data(self, data: ExportedInbox) -> None:
+        """Validate imported inbox data.
+
+        Args:
+            data: The exported inbox data.
+
+        Raises:
+            InvalidImportDataError: If the data is invalid.
+        """
+        # Check required fields
+        if not data.email_address:
+            raise InvalidImportDataError("Missing email_address")
+        if not data.expires_at:
+            raise InvalidImportDataError("Missing expires_at")
+        if not data.inbox_hash:
+            raise InvalidImportDataError("Missing inbox_hash")
+        if not data.server_sig_pk:
+            raise InvalidImportDataError("Missing server_sig_pk")
+        if not data.public_key_b64:
+            raise InvalidImportDataError("Missing public_key_b64")
+        if not data.secret_key_b64:
+            raise InvalidImportDataError("Missing secret_key_b64")
+
+        # Validate key lengths
+        try:
+            public_key = from_base64(data.public_key_b64)
+            if len(public_key) != MLKEM768_PUBLIC_KEY_SIZE:
+                raise InvalidImportDataError(
+                    f"Invalid public key length: {len(public_key)}, "
+                    f"expected {MLKEM768_PUBLIC_KEY_SIZE}"
+                )
+        except Exception as e:
+            if isinstance(e, InvalidImportDataError):
+                raise
+            raise InvalidImportDataError(f"Invalid public key: {e}") from e
+
+        try:
+            secret_key = from_base64(data.secret_key_b64)
+            if len(secret_key) != MLKEM768_SECRET_KEY_SIZE:
+                raise InvalidImportDataError(
+                    f"Invalid secret key length: {len(secret_key)}, "
+                    f"expected {MLKEM768_SECRET_KEY_SIZE}"
+                )
+        except Exception as e:
+            if isinstance(e, InvalidImportDataError):
+                raise
+            raise InvalidImportDataError(f"Invalid secret key: {e}") from e
+
+        # Validate timestamp format
+        try:
+            parse_iso_timestamp(data.expires_at)
+        except ValueError as e:
+            raise InvalidImportDataError(f"Invalid expires_at format: {e}") from e
+
+        # Verify server public key matches
+        if self._server_info and data.server_sig_pk != self._server_info.server_sig_pk:
+            raise InvalidImportDataError("Server signing public key does not match current server")

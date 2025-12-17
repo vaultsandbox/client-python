@@ -1,0 +1,468 @@
+"""Type definitions for VaultSandbox SDK."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from enum import Enum
+from re import Pattern
+from typing import Any, TypedDict
+
+
+class DeliveryStrategyType(str, Enum):
+    """Delivery strategy types."""
+
+    SSE = "sse"
+    POLLING = "polling"
+    AUTO = "auto"
+
+
+@dataclass
+class ClientConfig:
+    """Configuration for VaultSandboxClient.
+
+    Attributes:
+        api_key: API key for authentication.
+        base_url: Base URL for the API server.
+        timeout: HTTP request timeout in milliseconds.
+        max_retries: Maximum number of retry attempts.
+        retry_delay: Initial retry delay in milliseconds.
+        retry_on_status_codes: HTTP status codes to retry on.
+        strategy: Delivery strategy type.
+    """
+
+    api_key: str
+    base_url: str = "https://smtp.vaultsandbox.com"
+    timeout: int = 30000
+    max_retries: int = 3
+    retry_delay: int = 1000
+    retry_on_status_codes: tuple[int, ...] = (408, 429, 500, 502, 503, 504)
+    strategy: DeliveryStrategyType = DeliveryStrategyType.AUTO
+
+
+@dataclass
+class CreateInboxOptions:
+    """Options for creating an inbox.
+
+    Attributes:
+        ttl: Time-to-live in seconds (min: 60, max: 604800).
+        email_address: Desired email address or domain (max 254 chars).
+    """
+
+    ttl: int | None = None
+    email_address: str | None = None
+
+
+@dataclass
+class ServerInfo:
+    """Server information and capabilities.
+
+    Attributes:
+        server_sig_pk: Base64URL-encoded server signing public key.
+        algs: Cryptographic algorithms supported by the server.
+        context: Context string for the encryption scheme.
+        max_ttl: Maximum time-to-live for inboxes in seconds.
+        default_ttl: Default time-to-live for inboxes in seconds.
+        sse_console: Whether server SSE console logging is enabled.
+        allowed_domains: List of domains allowed for inbox creation.
+    """
+
+    server_sig_pk: str
+    algs: dict[str, str]
+    context: str
+    max_ttl: int
+    default_ttl: int
+    sse_console: bool
+    allowed_domains: list[str]
+
+
+@dataclass
+class SyncStatus:
+    """Inbox sync status.
+
+    Attributes:
+        email_count: Number of emails in the inbox.
+        emails_hash: Hash of email IDs for change detection.
+    """
+
+    email_count: int
+    emails_hash: str
+
+
+@dataclass
+class RawEmail:
+    """Raw email content.
+
+    Attributes:
+        id: The email ID.
+        raw: The raw MIME email content.
+    """
+
+    id: str
+    raw: str
+
+
+@dataclass
+class InboxData:
+    """Data returned when creating an inbox.
+
+    Attributes:
+        email_address: The email address assigned to the inbox.
+        expires_at: ISO 8601 timestamp when the inbox will expire.
+        inbox_hash: SHA-256 hash of the client KEM public key.
+        server_sig_pk: Server signing public key for verification.
+    """
+
+    email_address: str
+    expires_at: str
+    inbox_hash: str
+    server_sig_pk: str
+
+
+@dataclass
+class ExportedInbox:
+    """Exported inbox data for persistence/sharing.
+
+    Attributes:
+        email_address: The email address assigned to the inbox.
+        expires_at: ISO 8601 timestamp when the inbox will expire.
+        inbox_hash: SHA-256 hash of the client KEM public key.
+        server_sig_pk: Server signing public key for verification.
+        public_key_b64: Base64URL-encoded client public key.
+        secret_key_b64: Base64URL-encoded client secret key.
+        exported_at: ISO 8601 timestamp when the inbox was exported.
+    """
+
+    email_address: str
+    expires_at: str
+    inbox_hash: str
+    server_sig_pk: str
+    public_key_b64: str
+    secret_key_b64: str
+    exported_at: str
+
+
+# SPF status values
+class SPFStatus(str, Enum):
+    PASS = "pass"
+    FAIL = "fail"
+    SOFTFAIL = "softfail"
+    NEUTRAL = "neutral"
+    NONE = "none"
+    TEMPERROR = "temperror"
+    PERMERROR = "permerror"
+
+
+# DKIM status values
+class DKIMStatus(str, Enum):
+    PASS = "pass"
+    FAIL = "fail"
+    NONE = "none"
+
+
+# DMARC status values
+class DMARCStatus(str, Enum):
+    PASS = "pass"
+    FAIL = "fail"
+    NONE = "none"
+
+
+# DMARC policy values
+class DMARCPolicy(str, Enum):
+    NONE = "none"
+    QUARANTINE = "quarantine"
+    REJECT = "reject"
+
+
+# Reverse DNS status values
+class ReverseDNSStatus(str, Enum):
+    PASS = "pass"
+    FAIL = "fail"
+    NONE = "none"
+
+
+@dataclass
+class SPFResult:
+    """SPF validation result.
+
+    Attributes:
+        status: SPF status.
+        domain: Domain that was checked.
+        ip: IP address that was checked.
+        info: Additional information.
+    """
+
+    status: SPFStatus
+    domain: str | None = None
+    ip: str | None = None
+    info: str | None = None
+
+
+@dataclass
+class DKIMResult:
+    """DKIM validation result.
+
+    Attributes:
+        status: DKIM status.
+        domain: Domain that was checked.
+        selector: DKIM selector used.
+        info: Additional information.
+    """
+
+    status: DKIMStatus
+    domain: str | None = None
+    selector: str | None = None
+    info: str | None = None
+
+
+@dataclass
+class DMARCResult:
+    """DMARC validation result.
+
+    Attributes:
+        status: DMARC status.
+        policy: DMARC policy.
+        aligned: Whether DMARC is aligned.
+        domain: Domain that was checked.
+        info: Additional information.
+    """
+
+    status: DMARCStatus
+    policy: DMARCPolicy | None = None
+    aligned: bool | None = None
+    domain: str | None = None
+    info: str | None = None
+
+
+@dataclass
+class ReverseDNSResult:
+    """Reverse DNS validation result.
+
+    Attributes:
+        status: Reverse DNS status.
+        ip: IP address that was checked.
+        hostname: Hostname from PTR record.
+        info: Additional information.
+    """
+
+    status: ReverseDNSStatus
+    ip: str | None = None
+    hostname: str | None = None
+    info: str | None = None
+
+
+@dataclass
+class AuthResultsValidation:
+    """Summary of authentication results validation.
+
+    Attributes:
+        passed: Whether all checks passed.
+        spf_passed: Whether SPF check passed.
+        dkim_passed: Whether DKIM check passed.
+        dmarc_passed: Whether DMARC check passed.
+        reverse_dns_passed: Whether reverse DNS check passed.
+        failures: List of failure descriptions.
+    """
+
+    passed: bool
+    spf_passed: bool
+    dkim_passed: bool
+    dmarc_passed: bool
+    reverse_dns_passed: bool
+    failures: list[str] = field(default_factory=list)
+
+
+@dataclass
+class AuthResults:
+    """Email authentication results.
+
+    Attributes:
+        spf: SPF validation result.
+        dkim: List of DKIM validation results.
+        dmarc: DMARC validation result.
+        reverse_dns: Reverse DNS validation result.
+    """
+
+    spf: SPFResult | None = None
+    dkim: list[DKIMResult] = field(default_factory=list)
+    dmarc: DMARCResult | None = None
+    reverse_dns: ReverseDNSResult | None = None
+
+    def validate(self) -> AuthResultsValidation:
+        """Validate authentication results.
+
+        Returns:
+            AuthResultsValidation with passed flag, individual results, and any failures.
+        """
+        failures: list[str] = []
+
+        # Check SPF - requires explicit 'pass'
+        spf_passed = self.spf.status == SPFStatus.PASS if self.spf else False
+        if self.spf and not spf_passed:
+            domain_info = f" (domain: {self.spf.domain})" if self.spf.domain else ""
+            failures.append(f"SPF check failed: {self.spf.status.value}{domain_info}")
+
+        # Check DKIM - at least one signature must pass
+        dkim_passed = any(d.status == DKIMStatus.PASS for d in self.dkim) if self.dkim else False
+        if self.dkim and len(self.dkim) > 0 and not dkim_passed:
+            failed_domains = ", ".join(
+                d.domain for d in self.dkim if d.status != DKIMStatus.PASS and d.domain
+            )
+            failures.append(
+                f"DKIM signature failed{': ' + failed_domains if failed_domains else ''}"
+            )
+
+        # Check DMARC - requires explicit 'pass'
+        dmarc_passed = self.dmarc.status == DMARCStatus.PASS if self.dmarc else False
+        if self.dmarc and not dmarc_passed:
+            policy_info = f" (policy: {self.dmarc.policy.value})" if self.dmarc.policy else ""
+            failures.append(f"DMARC policy: {self.dmarc.status.value}{policy_info}")
+
+        # Check Reverse DNS - requires explicit 'pass'
+        reverse_dns_passed = (
+            self.reverse_dns.status == ReverseDNSStatus.PASS if self.reverse_dns else False
+        )
+        if self.reverse_dns and not reverse_dns_passed:
+            hostname_info = (
+                f" (hostname: {self.reverse_dns.hostname})" if self.reverse_dns.hostname else ""
+            )
+            failures.append(
+                f"Reverse DNS check failed: {self.reverse_dns.status.value}{hostname_info}"
+            )
+
+        return AuthResultsValidation(
+            passed=spf_passed and dkim_passed and dmarc_passed,
+            spf_passed=spf_passed,
+            dkim_passed=dkim_passed,
+            dmarc_passed=dmarc_passed,
+            reverse_dns_passed=reverse_dns_passed,
+            failures=failures,
+        )
+
+
+@dataclass
+class Attachment:
+    """Email attachment.
+
+    Attributes:
+        filename: Attachment filename.
+        content_type: MIME content type.
+        size: Attachment size in bytes.
+        content_id: Content ID for inline attachments.
+        content_disposition: Content disposition (attachment/inline).
+        content: Attachment content as bytes.
+        checksum: Optional SHA-256 hash of the attachment content.
+    """
+
+    filename: str
+    content_type: str
+    size: int
+    content: bytes
+    content_id: str | None = None
+    content_disposition: str | None = None
+    checksum: str | None = None
+
+
+@dataclass
+class WaitForEmailOptions:
+    """Options for waiting for an email.
+
+    Attributes:
+        subject: Match email subject (string or regex pattern).
+        from_address: Match sender address (string or regex pattern).
+        predicate: Custom filter function.
+        timeout: Max wait time in milliseconds.
+        poll_interval: Polling interval in milliseconds.
+    """
+
+    subject: str | Pattern[str] | None = None
+    from_address: str | Pattern[str] | None = None
+    predicate: Callable[..., bool] | None = None
+    timeout: int = 30000
+    poll_interval: int = 2000
+
+
+@dataclass
+class WaitForCountOptions:
+    """Options for waiting for a specific number of emails.
+
+    Attributes:
+        timeout: Maximum wait time in milliseconds (default: 30000).
+    """
+
+    timeout: int = 30000
+
+
+@dataclass
+class PollingConfig:
+    """Configuration for polling strategy.
+
+    Attributes:
+        initial_interval: Starting poll interval in milliseconds.
+        max_backoff: Maximum backoff delay in milliseconds.
+        backoff_multiplier: Backoff growth factor.
+        jitter_factor: Random jitter (0-30%).
+    """
+
+    initial_interval: int = 2000
+    max_backoff: int = 30000
+    backoff_multiplier: float = 1.5
+    jitter_factor: float = 0.3
+
+
+ErrorCallback = Callable[[BaseException], None]
+
+
+@dataclass
+class SSEConfig:
+    """Configuration for SSE strategy.
+
+    Attributes:
+        reconnect_interval: Initial reconnection interval in milliseconds.
+        max_reconnect_attempts: Maximum reconnection attempts.
+        on_error: Callback invoked when SSE connection fails permanently.
+    """
+
+    reconnect_interval: int = 5000
+    max_reconnect_attempts: int = 10
+    on_error: ErrorCallback | None = None
+
+
+# Type alias for email filter matcher
+EmailFilterMatcher = str | Pattern[str]
+
+
+class EncryptedPayload(TypedDict):
+    """Encrypted payload structure from server."""
+
+    v: int
+    algs: dict[str, str]
+    ct_kem: str
+    nonce: str
+    aad: str
+    ciphertext: str
+    sig: str
+    server_sig_pk: str
+
+
+class RawEmailResponse(TypedDict):
+    """Raw email response from server."""
+
+    id: str
+    encryptedRaw: EncryptedPayload
+
+
+class EmailResponse(TypedDict):
+    """Email response from server."""
+
+    id: str
+    inboxId: str
+    receivedAt: str
+    isRead: bool
+    encryptedMetadata: EncryptedPayload
+    encryptedParsed: EncryptedPayload
+
+
+# Callback types
+EmailCallback = Callable[..., None]
+AsyncEmailCallback = Callable[..., Any]
