@@ -17,7 +17,6 @@ from ..types import (
     DMARCStatus,
     EmailResponse,
     ReverseDNSResult,
-    ReverseDNSStatus,
     SPFResult,
     SPFStatus,
     WaitForEmailOptions,
@@ -39,10 +38,10 @@ def parse_spf_result(data: dict[str, Any] | None) -> SPFResult | None:
     if not data:
         return None
     return SPFResult(
-        status=SPFStatus(data.get("status", "none")),
+        result=SPFStatus(data.get("result", "none")),
         domain=data.get("domain"),
         ip=data.get("ip"),
-        info=data.get("info"),
+        details=data.get("details"),
     )
 
 
@@ -59,10 +58,10 @@ def parse_dkim_results(data: list[dict[str, Any]] | None) -> list[DKIMResult]:
         return []
     return [
         DKIMResult(
-            status=DKIMStatus(item.get("status", "none")),
+            result=DKIMStatus(item.get("result", "none")),
             domain=item.get("domain"),
             selector=item.get("selector"),
-            info=item.get("info"),
+            signature=item.get("signature"),
         )
         for item in data
     ]
@@ -81,11 +80,10 @@ def parse_dmarc_result(data: dict[str, Any] | None) -> DMARCResult | None:
         return None
     policy = data.get("policy")
     return DMARCResult(
-        status=DMARCStatus(data.get("status", "none")),
+        result=DMARCStatus(data.get("result", "none")),
         policy=DMARCPolicy(policy) if policy else None,
         aligned=data.get("aligned"),
         domain=data.get("domain"),
-        info=data.get("info"),
     )
 
 
@@ -101,10 +99,9 @@ def parse_reverse_dns_result(data: dict[str, Any] | None) -> ReverseDNSResult | 
     if not data:
         return None
     return ReverseDNSResult(
-        status=ReverseDNSStatus(data.get("status", "none")),
+        verified=data.get("verified", False),
         ip=data.get("ip"),
         hostname=data.get("hostname"),
-        info=data.get("info"),
     )
 
 

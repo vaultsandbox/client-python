@@ -231,9 +231,9 @@ print(raw_email.raw)  # Raw MIME content
 email = await inbox.wait_for_email()
 
 # Individual results
-print(f"SPF: {email.auth_results.spf.status}")
-print(f"DKIM: {[d.status for d in email.auth_results.dkim]}")
-print(f"DMARC: {email.auth_results.dmarc.status}")
+print(f"SPF: {email.auth_results.spf.result}")
+print(f"DKIM: {[d.result for d in email.auth_results.dkim]}")
+print(f"DMARC: {email.auth_results.dmarc.result}")
 
 # Validate all at once
 validation = email.auth_results.validate()

@@ -69,7 +69,6 @@ from .types import (
     PollingConfig,
     RawEmail,
     ReverseDNSResult,
-    ReverseDNSStatus,
     ServerInfo,
     SPFResult,
     SPFStatus,
@@ -79,7 +78,7 @@ from .types import (
     WaitForEmailOptions,
 )
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 __all__ = [
     # Main classes
@@ -124,7 +123,6 @@ __all__ = [
     "DMARCStatus",
     "DMARCPolicy",
     "ReverseDNSResult",
-    "ReverseDNSStatus",
     # Errors
     "VaultSandboxError",
     "ApiError",

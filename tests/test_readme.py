@@ -571,9 +571,9 @@ class TestEmailAuthenticationResults:
 
             # README example: Email Authentication Results
             # Individual results
-            print(f"SPF: {email.auth_results.spf.status}")
-            print(f"DKIM: {[d.status for d in email.auth_results.dkim]}")
-            print(f"DMARC: {email.auth_results.dmarc.status}")
+            print(f"SPF: {email.auth_results.spf.result}")
+            print(f"DKIM: {[d.result for d in email.auth_results.dkim]}")
+            print(f"DMARC: {email.auth_results.dmarc.result}")
 
             assert email.auth_results.spf is not None
             assert email.auth_results.dkim is not None
