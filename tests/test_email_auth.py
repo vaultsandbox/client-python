@@ -301,9 +301,7 @@ class TestSPFResults:
             assert email.auth_results.validate().spf_passed is False
 
     @pytest.mark.asyncio
-    async def test_spf_domain_extracted_from_sender(
-        self, api_config: dict[str, str]
-    ) -> None:
+    async def test_spf_domain_extracted_from_sender(self, api_config: dict[str, str]) -> None:
         """Test that SPF domain is extracted from the sender address."""
         async with VaultSandboxClient(**api_config) as client:
             inbox = await client.create_inbox()
@@ -390,9 +388,7 @@ class TestDKIMResults:
             assert email.auth_results.validate().dkim_passed is False
 
     @pytest.mark.asyncio
-    async def test_dkim_selector_and_signature_present(
-        self, api_config: dict[str, str]
-    ) -> None:
+    async def test_dkim_selector_and_signature_present(self, api_config: dict[str, str]) -> None:
         """Test that DKIM result includes selector and signature info."""
         async with VaultSandboxClient(**api_config) as client:
             inbox = await client.create_inbox()
@@ -564,9 +560,7 @@ class TestReverseDNS:
             assert any("Reverse DNS" in f for f in validation.failures)
 
     @pytest.mark.asyncio
-    async def test_reverse_dns_hostname_and_ip_present(
-        self, api_config: dict[str, str]
-    ) -> None:
+    async def test_reverse_dns_hostname_and_ip_present(self, api_config: dict[str, str]) -> None:
         """Test that reverse DNS result includes hostname and IP."""
         async with VaultSandboxClient(**api_config) as client:
             inbox = await client.create_inbox()
@@ -623,9 +617,7 @@ class TestMixedAuthResults:
     """Tests for emails with mixed authentication results."""
 
     @pytest.mark.asyncio
-    async def test_spf_softfail_dkim_pass_dmarc_fail(
-        self, api_config: dict[str, str]
-    ) -> None:
+    async def test_spf_softfail_dkim_pass_dmarc_fail(self, api_config: dict[str, str]) -> None:
         """Test mixed results: SPF softfail, DKIM pass, DMARC fail."""
         async with VaultSandboxClient(**api_config) as client:
             inbox = await client.create_inbox()
@@ -653,9 +645,7 @@ class TestMixedAuthResults:
             assert validation.reverse_dns_passed is True
 
     @pytest.mark.asyncio
-    async def test_spf_pass_dkim_fail_dmarc_pass(
-        self, api_config: dict[str, str]
-    ) -> None:
+    async def test_spf_pass_dkim_fail_dmarc_pass(self, api_config: dict[str, str]) -> None:
         """Test mixed results: SPF pass, DKIM fail, DMARC pass."""
         async with VaultSandboxClient(**api_config) as client:
             inbox = await client.create_inbox()
@@ -683,9 +673,7 @@ class TestMixedAuthResults:
             assert validation.reverse_dns_passed is True
 
     @pytest.mark.asyncio
-    async def test_all_pass_except_reverse_dns(
-        self, api_config: dict[str, str]
-    ) -> None:
+    async def test_all_pass_except_reverse_dns(self, api_config: dict[str, str]) -> None:
         """Test all passing except reverse DNS (should still pass overall)."""
         async with VaultSandboxClient(**api_config) as client:
             inbox = await client.create_inbox()
@@ -801,9 +789,7 @@ class TestValidationFailureMessages:
     """Tests for validation failure message content."""
 
     @pytest.mark.asyncio
-    async def test_spf_failure_message_includes_status(
-        self, api_config: dict[str, str]
-    ) -> None:
+    async def test_spf_failure_message_includes_status(self, api_config: dict[str, str]) -> None:
         """Test that SPF failure message includes the status."""
         async with VaultSandboxClient(**api_config) as client:
             inbox = await client.create_inbox()
@@ -824,9 +810,7 @@ class TestValidationFailureMessages:
             assert "softfail" in spf_failure
 
     @pytest.mark.asyncio
-    async def test_dmarc_failure_message_includes_policy(
-        self, api_config: dict[str, str]
-    ) -> None:
+    async def test_dmarc_failure_message_includes_policy(self, api_config: dict[str, str]) -> None:
         """Test that DMARC failure message includes policy info."""
         async with VaultSandboxClient(**api_config) as client:
             inbox = await client.create_inbox()

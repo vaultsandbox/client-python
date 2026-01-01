@@ -8,16 +8,11 @@ The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0
 
 ### Changed
 
-- **Breaking:** Renamed `status` field to `result` on `SPFResult`, `DKIMResult`, and `DMARCResult` to match wire format
-- **Breaking:** Renamed `info` field to `details` on `SPFResult`
-- **Breaking:** Renamed `info` field to `signature` on `DKIMResult`
-- **Breaking:** Replaced `status: ReverseDNSStatus` with `verified: bool` on `ReverseDNSResult`
-- Removed `info` field from `DMARCResult`
+- Standardized email authentication result structs to match wire format and other SDKs
 
 ### Added
 
-- Tests for parsing auth results from wire format (`TestAuthResultsParsing`)
-- Comprehensive email auth tests using Test Email API (`test_email_auth.py`) covering all SPF, DKIM, DMARC, and Reverse DNS scenarios
+- End-to-end integration tests for email authentication results using the test email API
 
 ### Removed
 
