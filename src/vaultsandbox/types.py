@@ -174,28 +174,21 @@ class DMARCPolicy(str, Enum):
     REJECT = "reject"
 
 
-# Reverse DNS status values
-class ReverseDNSStatus(str, Enum):
-    PASS = "pass"
-    FAIL = "fail"
-    NONE = "none"
-
-
 @dataclass
 class SPFResult:
     """SPF validation result.
 
     Attributes:
-        status: SPF status.
+        result: SPF result status.
         domain: Domain that was checked.
         ip: IP address that was checked.
-        info: Additional information.
+        details: Additional details.
     """
 
-    status: SPFStatus
+    result: SPFStatus
     domain: str | None = None
     ip: str | None = None
-    info: str | None = None
+    details: str | None = None
 
 
 @dataclass
@@ -203,16 +196,16 @@ class DKIMResult:
     """DKIM validation result.
 
     Attributes:
-        status: DKIM status.
+        result: DKIM result status.
         domain: Domain that was checked.
         selector: DKIM selector used.
-        info: Additional information.
+        signature: DKIM signature information.
     """
 
-    status: DKIMStatus
+    result: DKIMStatus
     domain: str | None = None
     selector: str | None = None
-    info: str | None = None
+    signature: str | None = None
 
 
 @dataclass
@@ -220,18 +213,16 @@ class DMARCResult:
     """DMARC validation result.
 
     Attributes:
-        status: DMARC status.
+        result: DMARC result status.
         policy: DMARC policy.
         aligned: Whether DMARC is aligned.
         domain: Domain that was checked.
-        info: Additional information.
     """
 
-    status: DMARCStatus
+    result: DMARCStatus
     policy: DMARCPolicy | None = None
     aligned: bool | None = None
     domain: str | None = None
-    info: str | None = None
 
 
 @dataclass
@@ -239,16 +230,14 @@ class ReverseDNSResult:
     """Reverse DNS validation result.
 
     Attributes:
-        status: Reverse DNS status.
+        verified: Whether reverse DNS is verified.
         ip: IP address that was checked.
         hostname: Hostname from PTR record.
-        info: Additional information.
     """
 
-    status: ReverseDNSStatus
+    verified: bool
     ip: str | None = None
     hostname: str | None = None
-    info: str | None = None
 
 
 @dataclass
@@ -297,38 +286,34 @@ class AuthResults:
         failures: list[str] = []
 
         # Check SPF - requires explicit 'pass'
-        spf_passed = self.spf.status == SPFStatus.PASS if self.spf else False
+        spf_passed = self.spf.result == SPFStatus.PASS if self.spf else False
         if self.spf and not spf_passed:
             domain_info = f" (domain: {self.spf.domain})" if self.spf.domain else ""
-            failures.append(f"SPF check failed: {self.spf.status.value}{domain_info}")
+            failures.append(f"SPF check failed: {self.spf.result.value}{domain_info}")
 
         # Check DKIM - at least one signature must pass
-        dkim_passed = any(d.status == DKIMStatus.PASS for d in self.dkim) if self.dkim else False
+        dkim_passed = any(d.result == DKIMStatus.PASS for d in self.dkim) if self.dkim else False
         if self.dkim and len(self.dkim) > 0 and not dkim_passed:
             failed_domains = ", ".join(
-                d.domain for d in self.dkim if d.status != DKIMStatus.PASS and d.domain
+                d.domain for d in self.dkim if d.result != DKIMStatus.PASS and d.domain
             )
             failures.append(
                 f"DKIM signature failed{': ' + failed_domains if failed_domains else ''}"
             )
 
         # Check DMARC - requires explicit 'pass'
-        dmarc_passed = self.dmarc.status == DMARCStatus.PASS if self.dmarc else False
+        dmarc_passed = self.dmarc.result == DMARCStatus.PASS if self.dmarc else False
         if self.dmarc and not dmarc_passed:
             policy_info = f" (policy: {self.dmarc.policy.value})" if self.dmarc.policy else ""
-            failures.append(f"DMARC policy: {self.dmarc.status.value}{policy_info}")
+            failures.append(f"DMARC policy: {self.dmarc.result.value}{policy_info}")
 
-        # Check Reverse DNS - requires explicit 'pass'
-        reverse_dns_passed = (
-            self.reverse_dns.status == ReverseDNSStatus.PASS if self.reverse_dns else False
-        )
+        # Check Reverse DNS - uses 'verified' boolean
+        reverse_dns_passed = self.reverse_dns.verified if self.reverse_dns else False
         if self.reverse_dns and not reverse_dns_passed:
             hostname_info = (
                 f" (hostname: {self.reverse_dns.hostname})" if self.reverse_dns.hostname else ""
             )
-            failures.append(
-                f"Reverse DNS check failed: {self.reverse_dns.status.value}{hostname_info}"
-            )
+            failures.append(f"Reverse DNS check failed{hostname_info}")
 
         return AuthResultsValidation(
             passed=spf_passed and dkim_passed and dmarc_passed,

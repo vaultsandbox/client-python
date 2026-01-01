@@ -634,7 +634,7 @@ class TestAuthenticationResults:
 
             # SPF should NOT pass since we're not authorized to send for example.com
             if email.auth_results.spf:
-                assert email.auth_results.spf.status != SPFStatus.PASS, (
+                assert email.auth_results.spf.result != SPFStatus.PASS, (
                     "SPF should not pass when sending directly without authorization"
                 )
 
@@ -665,7 +665,7 @@ class TestAuthenticationResults:
 
             # DKIM should NOT pass since we didn't sign the email
             for dkim_result in email.auth_results.dkim:
-                assert dkim_result.status != DKIMStatus.PASS, (
+                assert dkim_result.result != DKIMStatus.PASS, (
                     "DKIM should not pass when sending unsigned emails"
                 )
 
@@ -701,15 +701,15 @@ class TestAuthenticationResults:
 
             validation = email.auth_results.validate()
 
-            # Verify individual pass flags are consistent with explicit 'pass' status
+            # Verify individual pass flags are consistent with explicit 'pass' result
             expected_spf_passed = (
                 email.auth_results.spf is not None
-                and email.auth_results.spf.status == SPFStatus.PASS
+                and email.auth_results.spf.result == SPFStatus.PASS
             )
-            expected_dkim_passed = any(d.status == DKIMStatus.PASS for d in email.auth_results.dkim)
+            expected_dkim_passed = any(d.result == DKIMStatus.PASS for d in email.auth_results.dkim)
             expected_dmarc_passed = (
                 email.auth_results.dmarc is not None
-                and email.auth_results.dmarc.status == DMARCStatus.PASS
+                and email.auth_results.dmarc.result == DMARCStatus.PASS
             )
 
             assert validation.spf_passed == expected_spf_passed
