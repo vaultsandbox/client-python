@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from vaultsandbox.crypto import generate_keypair, to_base64
+from vaultsandbox.crypto import generate_keypair, to_base64url
 from vaultsandbox.inbox import Inbox
 from vaultsandbox.types import ExportedInbox
 
@@ -16,7 +16,7 @@ class TestInboxExport:
     """Tests for Inbox.export() method."""
 
     def test_export_returns_exported_inbox(self) -> None:
-        """Test export returns ExportedInbox with correct data."""
+        """Test export returns ExportedInbox with correct data per Section 9."""
         keypair = generate_keypair()
         expires_at = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -33,16 +33,16 @@ class TestInboxExport:
         exported = inbox.export()
 
         assert isinstance(exported, ExportedInbox)
+        assert exported.version == 1  # Per Section 9.3
         assert exported.email_address == "test@example.com"
         assert exported.expires_at == "2025-01-01T12:00:00Z"
         assert exported.inbox_hash == "test-hash"
         assert exported.server_sig_pk == "test-server-pk"
-        assert exported.public_key_b64 == to_base64(keypair.public_key)
-        assert exported.secret_key_b64 == to_base64(keypair.secret_key)
+        assert exported.secret_key == to_base64url(keypair.secret_key)
         assert exported.exported_at is not None
 
     def test_export_contains_valid_keys(self) -> None:
-        """Test exported data contains valid base64-encoded keys."""
+        """Test exported data contains valid base64url-encoded secret key."""
         keypair = generate_keypair()
         expires_at = datetime(2025, 1, 1, tzinfo=timezone.utc)
 
@@ -58,16 +58,15 @@ class TestInboxExport:
 
         exported = inbox.export()
 
-        # Keys should be non-empty base64 strings
-        assert len(exported.public_key_b64) > 0
-        assert len(exported.secret_key_b64) > 0
+        # Secret key should be non-empty base64url string
+        assert len(exported.secret_key) > 0
 
-        # Should be valid base64 (can include padding)
-        import base64
+        # Should be valid base64url (no padding per Section 2.2)
+        from vaultsandbox.crypto import from_base64url
 
-        # Verify keys can be decoded
-        base64.b64decode(exported.public_key_b64)
-        base64.b64decode(exported.secret_key_b64)
+        # Verify key can be decoded
+        decoded = from_base64url(exported.secret_key)
+        assert len(decoded) == 2400  # MLKEM768_SECRET_KEY_SIZE
 
 
 class TestInboxDelete:

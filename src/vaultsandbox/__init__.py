@@ -42,12 +42,17 @@ from .errors import (
     EmailNotFoundError,
     InboxAlreadyExistsError,
     InboxNotFoundError,
+    InvalidAlgorithmError,
     InvalidImportDataError,
+    InvalidPayloadError,
+    InvalidSizeError,
     NetworkError,
+    ServerKeyMismatchError,
     SignatureVerificationError,
     SSEError,
     StrategyError,
     TimeoutError,
+    UnsupportedVersionError,
     VaultSandboxError,
 )
 from .inbox import Inbox
@@ -64,6 +69,7 @@ from .types import (
     DMARCPolicy,
     DMARCResult,
     DMARCStatus,
+    EmailMetadata,
     ExportedInbox,
     InboxData,
     PollingConfig,
@@ -78,7 +84,7 @@ from .types import (
     WaitForEmailOptions,
 )
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 
 __all__ = [
     # Main classes
@@ -109,6 +115,7 @@ __all__ = [
     "Attachment",
     "AuthResults",
     "AuthResultsValidation",
+    "EmailMetadata",
     "ExportedInbox",
     "InboxData",
     "RawEmail",
@@ -123,7 +130,7 @@ __all__ = [
     "DMARCStatus",
     "DMARCPolicy",
     "ReverseDNSResult",
-    # Errors
+    # Errors (per Appendix C of VaultSandbox spec)
     "VaultSandboxError",
     "ApiError",
     "NetworkError",
@@ -136,6 +143,11 @@ __all__ = [
     "SignatureVerificationError",
     "SSEError",
     "StrategyError",
+    "UnsupportedVersionError",
+    "InvalidPayloadError",
+    "InvalidAlgorithmError",
+    "InvalidSizeError",
+    "ServerKeyMismatchError",
     # Version
     "__version__",
 ]

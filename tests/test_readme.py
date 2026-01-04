@@ -613,9 +613,9 @@ class TestExportImportInboxes:
             exported = client.export_inbox(inbox)
 
             assert exported is not None
+            assert exported.version == 1  # Per spec Section 9.3
             assert exported.email_address == inbox.email_address
-            assert exported.public_key_b64 is not None
-            assert exported.secret_key_b64 is not None
+            assert exported.secret_key is not None  # base64url encoded
 
             await inbox.delete()
 

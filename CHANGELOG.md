@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.0] - 2026-01-04
+
+### Added
+
+- `list_emails_metadata_only()` method for efficient metadata-only email listing
+- `EmailMetadata` type with `id`, `from_address`, `subject`, `received_at`, `is_read` fields
+- `include_content` parameter to API client's `list_emails()` method
+- New error types for granular cryptographic validation:
+  - `UnsupportedVersionError` - Protocol or export version not supported
+  - `InvalidPayloadError` - Malformed JSON or missing required fields
+  - `InvalidAlgorithmError` - Unrecognized or unsupported algorithm
+  - `InvalidSizeError` - Decoded field has incorrect size
+  - `ServerKeyMismatchError` - Server public key doesn't match pinned key
+- Encrypted payload validation before decryption (structure, version, algorithms, sizes)
+- Server key pinning support to detect server key mismatches
+- `delete_inbox()` method to delete a specific inbox by email address
+- `Base64URLDecodeError` for strict Base64URL validation
+- Additional crypto constants: `ALGORITHM_SUITE`, `PROTOCOL_VERSION`, `EXPORT_VERSION`, `MLKEM768_CIPHERTEXT_SIZE`, `MLKEM768_SHARED_SECRET_SIZE`, `MLDSA65_SIGNATURE_SIZE`
+- New `validation` module in crypto package for payload validation
+
+### Changed
+
+- `list_emails()` now fetches full content in single request (removes N+1 query pattern)
+- Export format now includes `version` field and uses `secretKey` instead of `secretKeyB64`/`publicKeyB64` (public key is derived from secret key)
+- Base64URL decoding now strictly rejects `+`, `/`, and `=` characters per spec
+- Decryption functions now accept optional `pinned_server_key` parameter
+- Generic error messages during decryption failures to prevent oracle attacks
+
+### Removed
+
+- `public_key_b64` field from `ExportedInbox` (public key derived from secret key)
+
 ## [0.5.1] - 2026-01-01
 
 ### Changed

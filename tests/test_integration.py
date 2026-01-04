@@ -895,9 +895,9 @@ class TestExportImport:
             # Export the inbox (this saves keypair info for later use)
             exported = client1.export_inbox(inbox)
 
+            assert exported.version == 1  # Per spec Section 9.3
             assert exported.email_address == original_address
-            assert exported.public_key_b64 is not None
-            assert exported.secret_key_b64 is not None
+            assert exported.secret_key is not None  # base64url encoded
 
             # Close the API client but don't delete the inbox
             # (manually close without calling close() which deletes inboxes)

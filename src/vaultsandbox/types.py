@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from re import Pattern
 from typing import Any, TypedDict
@@ -103,6 +104,25 @@ class RawEmail:
 
 
 @dataclass
+class EmailMetadata:
+    """Email metadata without full content.
+
+    Attributes:
+        id: The email ID.
+        from_address: Sender email address.
+        subject: Email subject.
+        received_at: When the email was received.
+        is_read: Whether the email has been read.
+    """
+
+    id: str
+    from_address: str
+    subject: str
+    received_at: datetime
+    is_read: bool
+
+
+@dataclass
 class InboxData:
     """Data returned when creating an inbox.
 
@@ -123,22 +143,33 @@ class InboxData:
 class ExportedInbox:
     """Exported inbox data for persistence/sharing.
 
+    Per VaultSandbox spec Section 9, the export format includes:
+    - version: Export format version (must be 1)
+    - emailAddress: The inbox email address
+    - expiresAt: Inbox expiration timestamp (ISO 8601)
+    - inboxHash: Unique inbox identifier
+    - serverSigPk: Server's ML-DSA-65 public key (base64url)
+    - secretKey: ML-KEM-768 secret key (base64url, 2400 bytes decoded)
+    - exportedAt: Export timestamp (ISO 8601)
+
+    Note: Public key is NOT included as it can be derived from secret key.
+
     Attributes:
+        version: Export format version (always 1).
         email_address: The email address assigned to the inbox.
         expires_at: ISO 8601 timestamp when the inbox will expire.
-        inbox_hash: SHA-256 hash of the client KEM public key.
-        server_sig_pk: Server signing public key for verification.
-        public_key_b64: Base64URL-encoded client public key.
-        secret_key_b64: Base64URL-encoded client secret key.
+        inbox_hash: Unique inbox identifier.
+        server_sig_pk: Server signing public key (base64url encoded).
+        secret_key: ML-KEM-768 secret key (base64url encoded).
         exported_at: ISO 8601 timestamp when the inbox was exported.
     """
 
+    version: int
     email_address: str
     expires_at: str
     inbox_hash: str
     server_sig_pk: str
-    public_key_b64: str
-    secret_key_b64: str
+    secret_key: str
     exported_at: str
 
 

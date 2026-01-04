@@ -1,4 +1,7 @@
-"""Error hierarchy for VaultSandbox SDK."""
+"""Error hierarchy for VaultSandbox SDK.
+
+Error codes follow VaultSandbox Cryptographic Protocol Specification Appendix C.
+"""
 
 from __future__ import annotations
 
@@ -21,6 +24,36 @@ class ApiError(VaultSandboxError):
         self.status_code = status_code
         self.message = message
         super().__init__(f"API Error ({status_code}): {message}")
+
+
+class UnsupportedVersionError(VaultSandboxError):
+    """Protocol or export version not supported (UNSUPPORTED_VERSION)."""
+
+    pass
+
+
+class InvalidPayloadError(VaultSandboxError):
+    """Malformed JSON or missing required fields (INVALID_PAYLOAD)."""
+
+    pass
+
+
+class InvalidAlgorithmError(VaultSandboxError):
+    """Unrecognized or unsupported algorithm (INVALID_ALGORITHM)."""
+
+    pass
+
+
+class InvalidSizeError(VaultSandboxError):
+    """Decoded field has incorrect size (INVALID_SIZE)."""
+
+    pass
+
+
+class ServerKeyMismatchError(VaultSandboxError):
+    """Server public key doesn't match pinned key (SERVER_KEY_MISMATCH)."""
+
+    pass
 
 
 class NetworkError(VaultSandboxError):

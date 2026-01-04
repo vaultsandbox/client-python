@@ -162,21 +162,32 @@ def parse_attachments(data: list[dict[str, Any]] | None) -> list[Attachment]:
 def decrypt_email_response(
     email_response: EmailResponse,
     keypair: Keypair,
+    pinned_server_key: str | None = None,
 ) -> dict[str, Any]:
     """Decrypt an email response into its components.
 
     Args:
         email_response: The encrypted email response from the server.
         keypair: The keypair to use for decryption.
+        pinned_server_key: The pinned server signature public key (base64url)
+            from inbox creation. If provided, validates server key matches.
 
     Returns:
         Dictionary with decrypted email data.
     """
-    # Decrypt metadata
-    metadata = decrypt_metadata(email_response["encryptedMetadata"], keypair)
+    # Decrypt metadata (with server key validation per Section 8)
+    metadata = decrypt_metadata(
+        email_response["encryptedMetadata"],
+        keypair,
+        pinned_server_key=pinned_server_key,
+    )
 
-    # Decrypt parsed content
-    parsed = decrypt_parsed(email_response["encryptedParsed"], keypair)
+    # Decrypt parsed content (with server key validation per Section 8)
+    parsed = decrypt_parsed(
+        email_response["encryptedParsed"],
+        keypair,
+        pinned_server_key=pinned_server_key,
+    )
 
     return {
         "id": email_response["id"],

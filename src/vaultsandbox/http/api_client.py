@@ -267,17 +267,21 @@ class ApiClient:
 
     # Email endpoints
 
-    async def list_emails(self, email_address: str) -> list[EmailResponse]:
+    async def list_emails(
+        self, email_address: str, include_content: bool = False
+    ) -> list[EmailResponse]:
         """List all emails in an inbox.
 
         Args:
             email_address: The email address of the inbox.
+            include_content: If True, include full email content in response.
 
         Returns:
             List of encrypted email responses.
         """
         encoded = _encode_path_segment(email_address)
-        response = await self._request("GET", f"/api/inboxes/{encoded}/emails")
+        params = {"includeContent": "true"} if include_content else None
+        response = await self._request("GET", f"/api/inboxes/{encoded}/emails", params=params)
         return cast(list[EmailResponse], response.json())
 
     async def get_email(self, email_address: str, email_id: str) -> EmailResponse:

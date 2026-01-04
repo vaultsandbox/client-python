@@ -63,7 +63,12 @@ class Email:
         Returns:
             A new Email instance with decrypted content.
         """
-        decrypted = decrypt_email_response(response, inbox._keypair)
+        # Pass pinned server key for validation per Section 8.1 step 5
+        decrypted = decrypt_email_response(
+            response,
+            inbox._keypair,
+            pinned_server_key=inbox.server_sig_pk,
+        )
 
         # Parse received_at timestamp
         received_at = parse_iso_timestamp(decrypted["received_at"])

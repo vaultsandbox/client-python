@@ -22,12 +22,16 @@ from .constants import (
 from .crypto import (
     Keypair,
     derive_public_key_from_secret,
-    from_base64,
+    from_base64url,
     generate_keypair,
-    to_base64,
+    to_base64url,
     validate_keypair,
 )
-from .crypto.constants import MLKEM768_PUBLIC_KEY_SIZE, MLKEM768_SECRET_KEY_SIZE
+from .crypto.constants import (
+    EXPORT_VERSION,
+    MLDSA65_PUBLIC_KEY_SIZE,
+    MLKEM768_SECRET_KEY_SIZE,
+)
 from .email import Email
 from .errors import (
     InboxAlreadyExistsError,
@@ -343,6 +347,17 @@ class VaultSandboxClient:
 
         return await self._api_client.delete_all_inboxes()
 
+    async def delete_inbox(self, email_address: str) -> None:
+        """Delete a specific inbox by email address.
+
+        Args:
+            email_address: The email address of the inbox to delete.
+        """
+        # Remove from local cache if present
+        self._inboxes.pop(email_address, None)
+
+        await self._api_client.delete_inbox(email_address)
+
     def monitor_inboxes(self, inboxes: list[Inbox]) -> InboxMonitor:
         """Create a monitor for multiple inboxes.
 
@@ -385,6 +400,8 @@ class VaultSandboxClient:
     ) -> None:
         """Export inbox data to a JSON file.
 
+        Per VaultSandbox spec Section 9.2, the JSON format uses camelCase field names.
+
         WARNING: Exported data contains private keys. Handle securely.
 
         Args:
@@ -395,13 +412,14 @@ class VaultSandboxClient:
             InboxNotFoundError: If the inbox is not found in the client.
         """
         exported = self.export_inbox(inbox_or_email)
+        # Per Section 9.2, use camelCase field names in JSON
         data = {
+            "version": exported.version,
             "emailAddress": exported.email_address,
             "expiresAt": exported.expires_at,
             "inboxHash": exported.inbox_hash,
             "serverSigPk": exported.server_sig_pk,
-            "publicKeyB64": exported.public_key_b64,
-            "secretKeyB64": exported.secret_key_b64,
+            "secretKey": exported.secret_key,
             "exportedAt": exported.exported_at,
         }
 
@@ -410,6 +428,8 @@ class VaultSandboxClient:
 
     async def import_inbox(self, data: ExportedInbox) -> Inbox:
         """Import an inbox from exported data.
+
+        Per VaultSandbox spec Section 10, validates and imports inbox data.
 
         Args:
             data: The exported inbox data.
@@ -427,34 +447,32 @@ class VaultSandboxClient:
         if self._server_info is None:
             raise RuntimeError("Client not initialized. Call create_inbox first.")
 
-        # Validate import data
+        # Validate import data per Section 10.1
         self._validate_import_data(data)
 
-        # Check if inbox already exists
+        # Check if inbox already exists (Section 10.4)
         if data.email_address in self._inboxes:
             raise InboxAlreadyExistsError(f"Inbox {data.email_address} already exists")
 
-        # Reconstruct keypair
-        public_key = from_base64(data.public_key_b64)
-        secret_key = from_base64(data.secret_key_b64)
+        # Reconstruct keypair per Section 10.2
+        # Secret key is base64url encoded per spec
+        secret_key = from_base64url(data.secret_key)
+        # Derive public key from secret key at offset 1152 (Section 4.2)
+        public_key = derive_public_key_from_secret(secret_key)
         keypair = Keypair(
             public_key=public_key,
             secret_key=secret_key,
-            public_key_b64=to_base64(public_key),
+            public_key_b64=to_base64url(public_key),
         )
 
         # Validate keypair
         if not validate_keypair(keypair):
             raise InvalidImportDataError("Invalid keypair in import data")
 
-        # Verify public key can be derived from secret key
-        derived_pk = derive_public_key_from_secret(secret_key)
-        if derived_pk != public_key:
-            raise InvalidImportDataError("Public key does not match secret key")
-
         # Parse expires_at timestamp
         expires_at = parse_iso_timestamp(data.expires_at)
 
+        # Create inbox instance per Section 10.3
         inbox = Inbox(
             email_address=data.email_address,
             expires_at=expires_at,
@@ -471,29 +489,50 @@ class VaultSandboxClient:
     async def import_inbox_from_file(self, file_path: str | Path) -> Inbox:
         """Import an inbox from a JSON file.
 
+        Per VaultSandbox spec Section 10, reads and validates the JSON export format.
+
         Args:
             file_path: Path to the import file.
 
         Returns:
             The imported Inbox instance.
+
+        Raises:
+            InvalidImportDataError: If the JSON is invalid or missing required fields.
         """
         path = Path(file_path)
-        data = json.loads(path.read_text())
+        try:
+            data = json.loads(path.read_text())
+        except json.JSONDecodeError as e:
+            raise InvalidImportDataError(f"Invalid JSON in import file: {e}") from e
 
-        exported = ExportedInbox(
-            email_address=data["emailAddress"],
-            expires_at=data["expiresAt"],
-            inbox_hash=data["inboxHash"],
-            server_sig_pk=data["serverSigPk"],
-            public_key_b64=data["publicKeyB64"],
-            secret_key_b64=data["secretKeyB64"],
-            exported_at=data.get("exportedAt", ""),
-        )
+        # Per Section 9.2 field names are camelCase
+        try:
+            exported = ExportedInbox(
+                version=data["version"],
+                email_address=data["emailAddress"],
+                expires_at=data["expiresAt"],
+                inbox_hash=data["inboxHash"],
+                server_sig_pk=data["serverSigPk"],
+                secret_key=data["secretKey"],
+                exported_at=data.get("exportedAt", ""),
+            )
+        except KeyError as e:
+            raise InvalidImportDataError(f"Missing required field in import file: {e}") from e
 
         return await self.import_inbox(exported)
 
     def _validate_import_data(self, data: ExportedInbox) -> None:
-        """Validate imported inbox data.
+        """Validate imported inbox data per Section 10.1.
+
+        Validation steps (must be performed in order):
+        1. Validate version == 1
+        2. Validate required fields present and non-null
+        3. Validate emailAddress contains exactly one @
+        4. Validate inboxHash is non-empty
+        5. Validate and decode secretKey (2400 bytes)
+        6. Validate and decode serverSigPk (1952 bytes)
+        7. Validate timestamps
 
         Args:
             data: The exported inbox data.
@@ -501,51 +540,73 @@ class VaultSandboxClient:
         Raises:
             InvalidImportDataError: If the data is invalid.
         """
-        # Check required fields
+        from .errors import UnsupportedVersionError
+
+        # Step 1: Validate version
+        if data.version != EXPORT_VERSION:
+            raise UnsupportedVersionError(
+                f"Unsupported export version: {data.version}, expected {EXPORT_VERSION}"
+            )
+
+        # Step 2: Check required fields
         if not data.email_address:
-            raise InvalidImportDataError("Missing email_address")
+            raise InvalidImportDataError("Missing emailAddress")
         if not data.expires_at:
-            raise InvalidImportDataError("Missing expires_at")
+            raise InvalidImportDataError("Missing expiresAt")
         if not data.inbox_hash:
-            raise InvalidImportDataError("Missing inbox_hash")
+            raise InvalidImportDataError("Missing inboxHash")
         if not data.server_sig_pk:
-            raise InvalidImportDataError("Missing server_sig_pk")
-        if not data.public_key_b64:
-            raise InvalidImportDataError("Missing public_key_b64")
-        if not data.secret_key_b64:
-            raise InvalidImportDataError("Missing secret_key_b64")
+            raise InvalidImportDataError("Missing serverSigPk")
+        if not data.secret_key:
+            raise InvalidImportDataError("Missing secretKey")
 
-        # Validate key lengths
-        try:
-            public_key = from_base64(data.public_key_b64)
-            if len(public_key) != MLKEM768_PUBLIC_KEY_SIZE:
-                raise InvalidImportDataError(
-                    f"Invalid public key length: {len(public_key)}, "
-                    f"expected {MLKEM768_PUBLIC_KEY_SIZE}"
-                )
-        except Exception as e:
-            if isinstance(e, InvalidImportDataError):
-                raise
-            raise InvalidImportDataError(f"Invalid public key: {e}") from e
+        # Step 3: Validate emailAddress contains exactly one @
+        at_count = data.email_address.count("@")
+        if at_count != 1:
+            raise InvalidImportDataError(
+                f"Invalid emailAddress: must contain exactly one '@', found {at_count}"
+            )
 
+        # Step 4: Validate inboxHash is non-empty (already checked above)
+
+        # Step 5: Validate and decode secretKey
         try:
-            secret_key = from_base64(data.secret_key_b64)
+            secret_key = from_base64url(data.secret_key)
             if len(secret_key) != MLKEM768_SECRET_KEY_SIZE:
                 raise InvalidImportDataError(
-                    f"Invalid secret key length: {len(secret_key)}, "
+                    f"Invalid secretKey length: {len(secret_key)} bytes, "
                     f"expected {MLKEM768_SECRET_KEY_SIZE}"
                 )
+        except InvalidImportDataError:
+            raise
         except Exception as e:
-            if isinstance(e, InvalidImportDataError):
-                raise
-            raise InvalidImportDataError(f"Invalid secret key: {e}") from e
+            raise InvalidImportDataError(f"Invalid secretKey encoding: {e}") from e
 
-        # Validate timestamp format
+        # Step 6: Validate and decode serverSigPk
+        try:
+            server_sig_pk = from_base64url(data.server_sig_pk)
+            if len(server_sig_pk) != MLDSA65_PUBLIC_KEY_SIZE:
+                raise InvalidImportDataError(
+                    f"Invalid serverSigPk length: {len(server_sig_pk)} bytes, "
+                    f"expected {MLDSA65_PUBLIC_KEY_SIZE}"
+                )
+        except InvalidImportDataError:
+            raise
+        except Exception as e:
+            raise InvalidImportDataError(f"Invalid serverSigPk encoding: {e}") from e
+
+        # Step 7: Validate timestamps
         try:
             parse_iso_timestamp(data.expires_at)
         except ValueError as e:
-            raise InvalidImportDataError(f"Invalid expires_at format: {e}") from e
+            raise InvalidImportDataError(f"Invalid expiresAt format: {e}") from e
 
-        # Verify server public key matches
+        if data.exported_at:
+            try:
+                parse_iso_timestamp(data.exported_at)
+            except ValueError as e:
+                raise InvalidImportDataError(f"Invalid exportedAt format: {e}") from e
+
+        # Verify server public key matches current server (if connected)
         if self._server_info and data.server_sig_pk != self._server_info.server_sig_pk:
             raise InvalidImportDataError("Server signing public key does not match current server")

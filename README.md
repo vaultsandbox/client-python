@@ -4,6 +4,8 @@
   <img alt="VaultSandbox" src="./assets/logo-dark.svg">
 </picture>
 
+> **VaultSandbox is in Public Beta.** Join the journey to 1.0. Share feedback on [GitHub](https://github.com/vaultsandbox/gateway/discussions).
+
 # @vaultsandbox/client-python
 
 [![PyPI version](https://img.shields.io/pypi/v/vaultsandbox.svg)](https://pypi.org/project/vaultsandbox/)

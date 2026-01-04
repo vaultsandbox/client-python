@@ -157,15 +157,15 @@ class TestVaultSandboxClientExportImport:
         client._initialized = True
 
         # Missing email_address
-        with pytest.raises(InvalidImportDataError, match="Missing email_address"):
+        with pytest.raises(InvalidImportDataError, match="Missing emailAddress"):
             await client.import_inbox(
                 ExportedInbox(
+                    version=1,
                     email_address="",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
                     server_sig_pk="pk",
-                    public_key_b64="pk",
-                    secret_key_b64="sk",
+                    secret_key="sk",
                     exported_at="2025-01-01T00:00:00Z",
                 )
             )
@@ -178,7 +178,6 @@ class TestVaultSandboxClientExportImport:
         # Mock _ensure_initialized to set up strategy and server_info
         mock_strategy = MagicMock()
         mock_server_info = MagicMock()
-        mock_server_info.server_sig_pk = "test-server-pk"
         client._strategy = mock_strategy
         client._server_info = mock_server_info
         client._initialized = True
@@ -187,19 +186,23 @@ class TestVaultSandboxClientExportImport:
         client._inboxes["test@example.com"] = MagicMock()
 
         # Create valid import data with proper key lengths
-        from vaultsandbox.crypto import generate_keypair, to_base64
+        from vaultsandbox.crypto import generate_keypair, to_base64url
 
         keypair = generate_keypair()
+
+        # Create a valid server signature public key (1952 bytes)
+        server_sig_pk = to_base64url(b"\x00" * 1952)
+        mock_server_info.server_sig_pk = server_sig_pk
 
         with pytest.raises(InboxAlreadyExistsError, match="already exists"):
             await client.import_inbox(
                 ExportedInbox(
+                    version=1,
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
-                    server_sig_pk="test-server-pk",
-                    public_key_b64=to_base64(keypair.public_key),
-                    secret_key_b64=to_base64(keypair.secret_key),
+                    server_sig_pk=server_sig_pk,
+                    secret_key=to_base64url(keypair.secret_key),
                     exported_at="2025-01-01T00:00:00Z",
                 )
             )
@@ -329,12 +332,12 @@ class TestVaultSandboxClientRuntimeChecks:
         with pytest.raises(RuntimeError, match="Client not initialized"):
             await client.import_inbox(
                 ExportedInbox(
+                    version=1,
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
                     server_sig_pk="pk",
-                    public_key_b64="pk",
-                    secret_key_b64="sk",
+                    secret_key="sk",
                     exported_at="2025-01-01T00:00:00Z",
                 )
             )
@@ -350,12 +353,12 @@ class TestVaultSandboxClientRuntimeChecks:
         with pytest.raises(RuntimeError, match="Client not initialized"):
             await client.import_inbox(
                 ExportedInbox(
+                    version=1,
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
                     server_sig_pk="pk",
-                    public_key_b64="pk",
-                    secret_key_b64="sk",
+                    secret_key="sk",
                     exported_at="2025-01-01T00:00:00Z",
                 )
             )
@@ -366,24 +369,29 @@ class TestImportExportValidation:
 
     @pytest.mark.asyncio
     async def test_import_invalid_base64(self) -> None:
-        """Import with invalid base64 keys throws InvalidImportDataError."""
+        """Import with invalid base64url keys throws InvalidImportDataError."""
+        from vaultsandbox.crypto import to_base64url
+
         client = VaultSandboxClient(api_key="test-key")
         mock_strategy = MagicMock()
         mock_server_info = MagicMock()
-        mock_server_info.server_sig_pk = "test-server-pk"
+        # Create a valid server signature public key (1952 bytes)
+        server_sig_pk = to_base64url(b"\x00" * 1952)
+        mock_server_info.server_sig_pk = server_sig_pk
         client._strategy = mock_strategy
         client._server_info = mock_server_info
         client._initialized = True
 
-        with pytest.raises(InvalidImportDataError, match="Invalid public key"):
+        # Invalid base64url characters (contains !)
+        with pytest.raises(InvalidImportDataError, match="Invalid secretKey encoding"):
             await client.import_inbox(
                 ExportedInbox(
+                    version=1,
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
-                    server_sig_pk="test-server-pk",
-                    public_key_b64="not!valid!base64!!!",
-                    secret_key_b64="also!invalid!!!",
+                    server_sig_pk=server_sig_pk,
+                    secret_key="not!valid!base64!!!",
                     exported_at="2025-01-01T00:00:00Z",
                 )
             )
@@ -391,26 +399,28 @@ class TestImportExportValidation:
     @pytest.mark.asyncio
     async def test_import_wrong_key_length(self) -> None:
         """Import with incorrect key sizes throws InvalidImportDataError."""
-        from vaultsandbox.crypto import to_base64
+        from vaultsandbox.crypto import to_base64url
 
         client = VaultSandboxClient(api_key="test-key")
         mock_strategy = MagicMock()
         mock_server_info = MagicMock()
-        mock_server_info.server_sig_pk = "test-server-pk"
+        # Create a valid server signature public key (1952 bytes)
+        server_sig_pk = to_base64url(b"\x00" * 1952)
+        mock_server_info.server_sig_pk = server_sig_pk
         client._strategy = mock_strategy
         client._server_info = mock_server_info
         client._initialized = True
 
-        # Create valid base64 but with wrong key sizes
-        with pytest.raises(InvalidImportDataError, match="Invalid public key length"):
+        # Create valid base64url but with wrong key sizes
+        with pytest.raises(InvalidImportDataError, match="Invalid secretKey length"):
             await client.import_inbox(
                 ExportedInbox(
+                    version=1,
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
-                    server_sig_pk="test-server-pk",
-                    public_key_b64=to_base64(b"short"),
-                    secret_key_b64=to_base64(b"short"),
+                    server_sig_pk=server_sig_pk,
+                    secret_key=to_base64url(b"short"),
                     exported_at="2025-01-01T00:00:00Z",
                 )
             )
@@ -418,29 +428,33 @@ class TestImportExportValidation:
     @pytest.mark.asyncio
     async def test_import_server_mismatch(self) -> None:
         """Import with different server_sig_pk throws InvalidImportDataError."""
-        from vaultsandbox.crypto import generate_keypair, to_base64
+        from vaultsandbox.crypto import generate_keypair, to_base64url
 
         client = VaultSandboxClient(api_key="test-key")
         mock_strategy = MagicMock()
         mock_server_info = MagicMock()
-        mock_server_info.server_sig_pk = "expected-server-pk"
+        # Create a valid server signature public key (1952 bytes)
+        expected_server_pk = to_base64url(b"\x00" * 1952)
+        mock_server_info.server_sig_pk = expected_server_pk
         client._strategy = mock_strategy
         client._server_info = mock_server_info
         client._initialized = True
 
         keypair = generate_keypair()
+        # Different server key (same length but different content)
+        different_server_pk = to_base64url(b"\x01" * 1952)
 
         with pytest.raises(
             InvalidImportDataError, match="Server signing public key does not match"
         ):
             await client.import_inbox(
                 ExportedInbox(
+                    version=1,
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
-                    server_sig_pk="different-server-pk",
-                    public_key_b64=to_base64(keypair.public_key),
-                    secret_key_b64=to_base64(keypair.secret_key),
+                    server_sig_pk=different_server_pk,
+                    secret_key=to_base64url(keypair.secret_key),
                     exported_at="2025-01-01T00:00:00Z",
                 )
             )
@@ -448,27 +462,29 @@ class TestImportExportValidation:
     @pytest.mark.asyncio
     async def test_import_inbox_missing_inbox_hash(self) -> None:
         """Import with empty inbox_hash throws InvalidImportDataError."""
-        from vaultsandbox.crypto import generate_keypair, to_base64
+        from vaultsandbox.crypto import generate_keypair, to_base64url
 
         client = VaultSandboxClient(api_key="test-key")
         mock_strategy = MagicMock()
         mock_server_info = MagicMock()
-        mock_server_info.server_sig_pk = "test-server-pk"
+        # Create a valid server signature public key (1952 bytes)
+        server_sig_pk = to_base64url(b"\x00" * 1952)
+        mock_server_info.server_sig_pk = server_sig_pk
         client._strategy = mock_strategy
         client._server_info = mock_server_info
         client._initialized = True
 
         keypair = generate_keypair()
 
-        with pytest.raises(InvalidImportDataError, match="Missing inbox_hash"):
+        with pytest.raises(InvalidImportDataError, match="Missing inboxHash"):
             await client.import_inbox(
                 ExportedInbox(
+                    version=1,
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="",  # Empty
-                    server_sig_pk="test-server-pk",
-                    public_key_b64=to_base64(keypair.public_key),
-                    secret_key_b64=to_base64(keypair.secret_key),
+                    server_sig_pk=server_sig_pk,
+                    secret_key=to_base64url(keypair.secret_key),
                     exported_at="2025-01-01T00:00:00Z",
                 )
             )
@@ -479,7 +495,7 @@ class TestExportInbox:
 
     def test_export_inbox_returns_exported_inbox(self) -> None:
         """Test that export_inbox returns an ExportedInbox object."""
-        from vaultsandbox.crypto import generate_keypair, to_base64
+        from vaultsandbox.crypto import generate_keypair, to_base64url
 
         client = VaultSandboxClient(api_key="test-key")
 
@@ -488,12 +504,12 @@ class TestExportInbox:
         mock_inbox = MagicMock()
         mock_inbox.email_address = "test@example.com"
         mock_inbox.export.return_value = ExportedInbox(
+            version=1,
             email_address="test@example.com",
             inbox_hash="test-hash",
             expires_at="2025-01-01T00:00:00Z",
             server_sig_pk="server-pk",
-            public_key_b64=to_base64(keypair.public_key),
-            secret_key_b64=to_base64(keypair.secret_key),
+            secret_key=to_base64url(keypair.secret_key),
             exported_at="2025-01-01T00:00:00Z",
         )
 
@@ -502,16 +518,16 @@ class TestExportInbox:
         exported = client.export_inbox(mock_inbox)
 
         assert isinstance(exported, ExportedInbox)
+        assert exported.version == 1
         assert exported.email_address == "test@example.com"
         assert exported.inbox_hash == "test-hash"
         assert exported.server_sig_pk == "server-pk"
-        assert exported.public_key_b64 is not None
-        assert exported.secret_key_b64 is not None
+        assert exported.secret_key is not None
         assert exported.exported_at is not None
 
     def test_export_inbox_by_email_address(self) -> None:
         """Test export using email address string works."""
-        from vaultsandbox.crypto import generate_keypair, to_base64
+        from vaultsandbox.crypto import generate_keypair, to_base64url
 
         client = VaultSandboxClient(api_key="test-key")
 
@@ -520,12 +536,12 @@ class TestExportInbox:
         mock_inbox = MagicMock()
         mock_inbox.email_address = "test@example.com"
         mock_inbox.export.return_value = ExportedInbox(
+            version=1,
             email_address="test@example.com",
             inbox_hash="test-hash",
             expires_at="2025-01-01T00:00:00Z",
             server_sig_pk="server-pk",
-            public_key_b64=to_base64(keypair.public_key),
-            secret_key_b64=to_base64(keypair.secret_key),
+            secret_key=to_base64url(keypair.secret_key),
             exported_at="2025-01-01T00:00:00Z",
         )
 
@@ -538,7 +554,7 @@ class TestExportInbox:
 
     def test_export_inbox_has_valid_timestamps(self) -> None:
         """Check timestamp fields are valid ISO 8601 format."""
-        from vaultsandbox.crypto import generate_keypair, to_base64
+        from vaultsandbox.crypto import generate_keypair, to_base64url
 
         client = VaultSandboxClient(api_key="test-key")
 
@@ -546,12 +562,12 @@ class TestExportInbox:
         mock_inbox = MagicMock()
         mock_inbox.email_address = "test@example.com"
         mock_inbox.export.return_value = ExportedInbox(
+            version=1,
             email_address="test@example.com",
             inbox_hash="test-hash",
             expires_at="2025-01-01T00:00:00Z",
             server_sig_pk="server-pk",
-            public_key_b64=to_base64(keypair.public_key),
-            secret_key_b64=to_base64(keypair.secret_key),
+            secret_key=to_base64url(keypair.secret_key),
             exported_at="2025-01-01T12:00:00Z",
         )
 

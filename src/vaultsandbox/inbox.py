@@ -8,16 +8,19 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
-from .crypto import Keypair, to_base64
+from .crypto import Keypair, decrypt_metadata, to_base64url
+from .crypto.constants import EXPORT_VERSION
 from .email import Email
 from .errors import TimeoutError
 from .strategies import Subscription
 from .types import (
+    EmailMetadata,
     ExportedInbox,
     SyncStatus,
     WaitForCountOptions,
     WaitForEmailOptions,
 )
+from .utils import parse_iso_timestamp
 from .utils.email_utils import matches_filter
 
 if TYPE_CHECKING:
@@ -47,18 +50,44 @@ class Inbox:
     _subscriptions: list[Subscription] = field(default_factory=list, repr=False)
 
     async def list_emails(self) -> list[Email]:
-        """List all emails in the inbox.
+        """List all emails in the inbox with full content.
 
         Returns:
-            List of Email objects.
+            List of Email objects with full content.
         """
-        list_responses = await self._api_client.list_emails(self.email_address)
+        list_responses = await self._api_client.list_emails(
+            self.email_address, include_content=True
+        )
+        return [Email._from_response(email_data, self) for email_data in list_responses]
+
+    async def list_emails_metadata_only(self) -> list[EmailMetadata]:
+        """List all emails in the inbox with metadata only.
+
+        This is more efficient than list_emails() when you only need
+        basic information like subject and sender.
+
+        Returns:
+            List of EmailMetadata objects.
+        """
+        list_responses = await self._api_client.list_emails(
+            self.email_address, include_content=False
+        )
         emails = []
         for email_data in list_responses:
-            # Check if full encrypted content is present; if not, fetch it
-            if not email_data.get("encryptedParsed"):
-                email_data = await self._api_client.get_email(self.email_address, email_data["id"])
-            emails.append(Email._from_response(email_data, self))
+            metadata = decrypt_metadata(
+                email_data["encryptedMetadata"],
+                self._keypair,
+                pinned_server_key=self.server_sig_pk,
+            )
+            emails.append(
+                EmailMetadata(
+                    id=email_data["id"],
+                    from_address=metadata.get("from", ""),
+                    subject=metadata.get("subject", ""),
+                    received_at=parse_iso_timestamp(metadata.get("receivedAt", "")),
+                    is_read=email_data.get("isRead", False),
+                )
+            )
         return emails
 
     async def get_email(self, email_id: str) -> Email:
@@ -86,7 +115,12 @@ class Inbox:
         from .types import RawEmail
 
         raw_response = await self._api_client.get_raw_email(self.email_address, email_id)
-        raw = decrypt_raw(raw_response["encryptedRaw"], self._keypair)
+        # Pass pinned server key for validation per Section 8.1 step 5
+        raw = decrypt_raw(
+            raw_response["encryptedRaw"],
+            self._keypair,
+            pinned_server_key=self.server_sig_pk,
+        )
         return RawEmail(id=raw_response["id"], raw=raw)
 
     async def mark_email_as_read(self, email_id: str) -> None:
@@ -265,17 +299,23 @@ class Inbox:
     def export(self) -> ExportedInbox:
         """Export inbox data for persistence/sharing.
 
+        Per VaultSandbox spec Section 9, exports include version, email address,
+        expiration, inbox hash, server public key, and secret key (base64url encoded).
+
+        Note: Public key is NOT exported as it can be derived from secret key
+        at offset 1152 (see Section 4.2).
+
         WARNING: Exported data contains private keys. Handle securely.
 
         Returns:
             ExportedInbox with keypair and metadata.
         """
         return ExportedInbox(
+            version=EXPORT_VERSION,
             email_address=self.email_address,
             expires_at=self.expires_at.isoformat().replace("+00:00", "Z"),
             inbox_hash=self.inbox_hash,
             server_sig_pk=self.server_sig_pk,
-            public_key_b64=to_base64(self._keypair.public_key),
-            secret_key_b64=to_base64(self._keypair.secret_key),
+            secret_key=to_base64url(self._keypair.secret_key),
             exported_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         )
