@@ -132,11 +132,11 @@ class ApiClient:
                 raise NetworkError(f"Network error: {e}") from e
 
         # Should not reach here, but just in case
-        if last_error:
+        if last_error:  # pragma: no cover
             raise NetworkError(
                 f"Request failed after {self.config.max_retries} retries"
             ) from last_error
-        raise NetworkError(f"Request failed after {self.config.max_retries} retries")
+        raise NetworkError(f"Request failed after {self.config.max_retries} retries")  # pragma: no cover
 
     def _handle_error_response(self, response: httpx.Response) -> None:
         """Handle HTTP error responses.
