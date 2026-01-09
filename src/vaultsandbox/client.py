@@ -339,6 +339,11 @@ class VaultSandboxClient:
     async def delete_all_inboxes(self) -> int:
         """Delete all inboxes for the API key.
 
+        Warning:
+            This method should never be called during integration tests as it
+            deletes ALL inboxes for the API key, which interferes with concurrent
+            test runs and other testing activities.
+
         Returns:
             Number of inboxes deleted.
         """

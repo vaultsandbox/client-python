@@ -765,20 +765,6 @@ class TestDeleteInboxes:
             assert new_inbox.email_address != email_address
             await new_inbox.delete()
 
-    @pytest.mark.asyncio
-    async def test_delete_all_inboxes(self, api_config: dict[str, str]) -> None:
-        """Test deleting all inboxes for API key."""
-        async with VaultSandboxClient(**api_config) as client:
-            # Create a few inboxes
-            await client.create_inbox()
-            await client.create_inbox()
-
-            # README example: Delete all inboxes for API key
-            deleted_count = await client.delete_all_inboxes()
-
-            assert deleted_count >= 2
-
-
 class TestErrorHandling:
     """Tests for error handling patterns shown in README."""
 
