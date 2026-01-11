@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from vaultsandbox.crypto import generate_keypair, to_base64url
 from vaultsandbox.inbox import Inbox
-from vaultsandbox.types import ExportedInbox
+from vaultsandbox.types import EmailMetadata, ExportedInbox
 
 
 class TestInboxExport:
@@ -67,6 +67,241 @@ class TestInboxExport:
         # Verify key can be decoded
         decoded = from_base64url(exported.secret_key)
         assert len(decoded) == 2400  # MLKEM768_SECRET_KEY_SIZE
+
+
+class TestInboxListEmailsMetadataOnly:
+    """Tests for Inbox.list_emails_metadata_only() method."""
+
+    @pytest.mark.asyncio
+    async def test_list_emails_metadata_only_returns_metadata(self) -> None:
+        """Test list_emails_metadata_only returns EmailMetadata objects."""
+        keypair = generate_keypair()
+        mock_api_client = MagicMock()
+        mock_api_client.list_emails = AsyncMock(
+            return_value=[
+                {
+                    "id": "email-1",
+                    "encryptedMetadata": {"mock": "encrypted"},
+                    "isRead": True,
+                },
+                {
+                    "id": "email-2",
+                    "encryptedMetadata": {"mock": "encrypted2"},
+                    "isRead": False,
+                },
+            ]
+        )
+
+        inbox = Inbox(
+            email_address="test@example.com",
+            expires_at=datetime.now(timezone.utc),
+            inbox_hash="test-hash",
+            server_sig_pk="test-server-pk",
+            _keypair=keypair,
+            _api_client=mock_api_client,
+            _strategy=MagicMock(),
+        )
+
+        # Mock decrypt_metadata to return test data
+        with patch("vaultsandbox.inbox.decrypt_metadata") as mock_decrypt:
+            mock_decrypt.side_effect = [
+                {
+                    "from": "sender1@example.com",
+                    "subject": "Test Subject 1",
+                    "receivedAt": "2025-01-01T12:00:00Z",
+                },
+                {
+                    "from": "sender2@example.com",
+                    "subject": "Test Subject 2",
+                    "receivedAt": "2025-01-02T13:00:00Z",
+                },
+            ]
+
+            result = await inbox.list_emails_metadata_only()
+
+        # Verify API was called correctly
+        mock_api_client.list_emails.assert_called_once_with(
+            "test@example.com", include_content=False
+        )
+
+        # Verify decrypt_metadata was called for each email
+        assert mock_decrypt.call_count == 2
+        mock_decrypt.assert_any_call(
+            {"mock": "encrypted"},
+            keypair,
+            pinned_server_key="test-server-pk",
+        )
+
+        # Verify result is correct
+        assert len(result) == 2
+        assert isinstance(result[0], EmailMetadata)
+        assert result[0].id == "email-1"
+        assert result[0].from_address == "sender1@example.com"
+        assert result[0].subject == "Test Subject 1"
+        assert result[0].is_read is True
+
+        assert result[1].id == "email-2"
+        assert result[1].from_address == "sender2@example.com"
+        assert result[1].subject == "Test Subject 2"
+        assert result[1].is_read is False
+
+    @pytest.mark.asyncio
+    async def test_list_emails_metadata_only_empty_inbox(self) -> None:
+        """Test list_emails_metadata_only with empty inbox."""
+        keypair = generate_keypair()
+        mock_api_client = MagicMock()
+        mock_api_client.list_emails = AsyncMock(return_value=[])
+
+        inbox = Inbox(
+            email_address="test@example.com",
+            expires_at=datetime.now(timezone.utc),
+            inbox_hash="test-hash",
+            server_sig_pk="test-server-pk",
+            _keypair=keypair,
+            _api_client=mock_api_client,
+            _strategy=MagicMock(),
+        )
+
+        result = await inbox.list_emails_metadata_only()
+
+        assert result == []
+        mock_api_client.list_emails.assert_called_once_with(
+            "test@example.com", include_content=False
+        )
+
+
+class TestInboxGetEmail:
+    """Tests for Inbox.get_email() method."""
+
+    @pytest.mark.asyncio
+    async def test_get_email_calls_api(self) -> None:
+        """Test get_email retrieves email via API client."""
+        keypair = generate_keypair()
+        mock_api_client = MagicMock()
+        mock_response = {"id": "email-123", "content": "test"}
+        mock_api_client.get_email = AsyncMock(return_value=mock_response)
+
+        inbox = Inbox(
+            email_address="test@example.com",
+            expires_at=datetime.now(timezone.utc),
+            inbox_hash="test-hash",
+            server_sig_pk="test-server-pk",
+            _keypair=keypair,
+            _api_client=mock_api_client,
+            _strategy=MagicMock(),
+        )
+
+        # Mock Email._from_response
+        with patch("vaultsandbox.inbox.Email._from_response") as mock_from_response:
+            mock_email = MagicMock()
+            mock_email.id = "email-123"
+            mock_from_response.return_value = mock_email
+
+            result = await inbox.get_email("email-123")
+
+        assert result.id == "email-123"
+        mock_api_client.get_email.assert_called_once_with("test@example.com", "email-123")
+        mock_from_response.assert_called_once_with(mock_response, inbox)
+
+
+class TestInboxGetRawEmail:
+    """Tests for Inbox.get_raw_email() method."""
+
+    @pytest.mark.asyncio
+    async def test_get_raw_email_decrypts_and_returns(self) -> None:
+        """Test get_raw_email retrieves and decrypts raw MIME content."""
+        keypair = generate_keypair()
+        mock_api_client = MagicMock()
+        mock_api_client.get_raw_email = AsyncMock(
+            return_value={
+                "id": "email-123",
+                "encryptedRaw": {"mock": "encrypted"},
+            }
+        )
+
+        inbox = Inbox(
+            email_address="test@example.com",
+            expires_at=datetime.now(timezone.utc),
+            inbox_hash="test-hash",
+            server_sig_pk="test-server-pk",
+            _keypair=keypair,
+            _api_client=mock_api_client,
+            _strategy=MagicMock(),
+        )
+
+        with patch("vaultsandbox.crypto.decrypt_raw") as mock_decrypt_raw:
+            mock_decrypt_raw.return_value = b"From: test@example.com\r\nSubject: Test\r\n\r\nBody"
+
+            result = await inbox.get_raw_email("email-123")
+
+            assert result.id == "email-123"
+            assert result.raw == b"From: test@example.com\r\nSubject: Test\r\n\r\nBody"
+            mock_api_client.get_raw_email.assert_called_once_with("test@example.com", "email-123")
+            mock_decrypt_raw.assert_called_once_with(
+                {"mock": "encrypted"},
+                keypair,
+                pinned_server_key="test-server-pk",
+            )
+
+
+class TestInboxUnsubscribe:
+    """Tests for Inbox.unsubscribe() method."""
+
+    @pytest.mark.asyncio
+    async def test_unsubscribe_removes_subscription(self) -> None:
+        """Test unsubscribe removes subscription from list."""
+        keypair = generate_keypair()
+        mock_api_client = MagicMock()
+        mock_strategy = MagicMock()
+        mock_strategy.unsubscribe = AsyncMock()
+
+        inbox = Inbox(
+            email_address="test@example.com",
+            expires_at=datetime.now(timezone.utc),
+            inbox_hash="test-hash",
+            server_sig_pk="test-server-pk",
+            _keypair=keypair,
+            _api_client=mock_api_client,
+            _strategy=mock_strategy,
+        )
+
+        # Add a subscription to the list
+        mock_subscription = MagicMock()
+        inbox._subscriptions = [mock_subscription]
+
+        await inbox.unsubscribe(mock_subscription)
+
+        # Verify strategy.unsubscribe was called
+        mock_strategy.unsubscribe.assert_called_once_with(mock_subscription)
+        # Verify subscription was removed from the list
+        assert mock_subscription not in inbox._subscriptions
+
+    @pytest.mark.asyncio
+    async def test_unsubscribe_handles_missing_subscription(self) -> None:
+        """Test unsubscribe handles subscription not in list."""
+        keypair = generate_keypair()
+        mock_api_client = MagicMock()
+        mock_strategy = MagicMock()
+        mock_strategy.unsubscribe = AsyncMock()
+
+        inbox = Inbox(
+            email_address="test@example.com",
+            expires_at=datetime.now(timezone.utc),
+            inbox_hash="test-hash",
+            server_sig_pk="test-server-pk",
+            _keypair=keypair,
+            _api_client=mock_api_client,
+            _strategy=mock_strategy,
+        )
+
+        # Subscription not in list
+        mock_subscription = MagicMock()
+        inbox._subscriptions = []
+
+        # Should not raise
+        await inbox.unsubscribe(mock_subscription)
+
+        mock_strategy.unsubscribe.assert_called_once_with(mock_subscription)
 
 
 class TestInboxDelete:
@@ -356,3 +591,195 @@ class TestInboxWaitForEmailCount:
 
         # Verify cleanup still happened
         mock_strategy.unsubscribe.assert_called_once_with(mock_subscription)
+
+    @pytest.mark.asyncio
+    async def test_wait_for_email_count_callback_after_done(self) -> None:
+        """Test wait_for_email_count callback early return when result already set (lines 230, 236)."""
+        import asyncio
+
+        keypair = generate_keypair()
+        mock_api_client = MagicMock()
+        mock_strategy = MagicMock()
+        mock_subscription = MagicMock()
+        captured_callback = None
+
+        async def capture_subscribe(inbox, callback):
+            nonlocal captured_callback
+            captured_callback = callback
+            return mock_subscription
+
+        mock_strategy.subscribe = AsyncMock(side_effect=capture_subscribe)
+        mock_strategy.unsubscribe = AsyncMock()
+
+        inbox = Inbox(
+            email_address="test@example.com",
+            expires_at=datetime.now(timezone.utc),
+            inbox_hash="test-hash",
+            server_sig_pk="test-server-pk",
+            _keypair=keypair,
+            _api_client=mock_api_client,
+            _strategy=mock_strategy,
+        )
+
+        # Mock list_emails to return 2 emails immediately (meeting the count)
+        mock_email1 = MagicMock()
+        mock_email1.id = "email-1"
+        mock_email2 = MagicMock()
+        mock_email2.id = "email-2"
+        inbox.list_emails = AsyncMock(return_value=[mock_email1, mock_email2])
+
+        from vaultsandbox.types import WaitForCountOptions
+
+        # Start wait_for_email_count in a task
+        task = asyncio.create_task(
+            inbox.wait_for_email_count(2, WaitForCountOptions(timeout=10000))
+        )
+
+        # Let the task run to completion
+        emails = await task
+
+        assert len(emails) == 2
+
+        # Now the result_future is done. Call the callback again to test early return (line 230)
+        # This should trigger the early return path when result_future.done() is True
+        if captured_callback:
+            mock_new_email = MagicMock()
+            mock_new_email.id = "email-3"
+            # This callback call exercises line 236, and the check_count early return at line 230
+            await captured_callback(mock_new_email)
+
+
+class TestInboxWaitForEmail:
+    """Tests for Inbox.wait_for_email() method."""
+
+    @pytest.mark.asyncio
+    async def test_wait_for_email_callback_after_done(self) -> None:
+        """Test wait_for_email callback early return when result already set (lines 178-181)."""
+
+        keypair = generate_keypair()
+        mock_api_client = MagicMock()
+        mock_strategy = MagicMock()
+        mock_subscription = MagicMock()
+        captured_callback = None
+
+        async def capture_subscribe(inbox, callback):
+            nonlocal captured_callback
+            captured_callback = callback
+            return mock_subscription
+
+        mock_strategy.subscribe = AsyncMock(side_effect=capture_subscribe)
+        mock_strategy.unsubscribe = AsyncMock()
+
+        inbox = Inbox(
+            email_address="test@example.com",
+            expires_at=datetime.now(timezone.utc),
+            inbox_hash="test-hash",
+            server_sig_pk="test-server-pk",
+            _keypair=keypair,
+            _api_client=mock_api_client,
+            _strategy=mock_strategy,
+        )
+
+        # Mock list_emails to return one matching email immediately
+        mock_email = MagicMock()
+        mock_email.id = "email-1"
+        mock_email.subject = "Test Subject"
+        mock_email.from_address = "sender@example.com"
+        inbox.list_emails = AsyncMock(return_value=[mock_email])
+
+        from vaultsandbox.types import WaitForEmailOptions
+
+        # Wait for email - should find the existing one
+        result = await inbox.wait_for_email(WaitForEmailOptions(timeout=10000))
+
+        assert result.id == "email-1"
+
+        # Now the result_future is done. Call the callback again to test early return (line 178-179)
+        if captured_callback:
+            mock_new_email = MagicMock()
+            mock_new_email.id = "email-2"
+            mock_new_email.subject = "Another Subject"
+            mock_new_email.from_address = "another@example.com"
+            # This callback call should hit the early return at lines 178-179
+            await captured_callback(mock_new_email)
+
+    @pytest.mark.asyncio
+    async def test_wait_for_email_callback_sets_result(self) -> None:
+        """Test wait_for_email callback sets result when filter matches (lines 180-181)."""
+        import asyncio
+
+        keypair = generate_keypair()
+        mock_api_client = MagicMock()
+        mock_strategy = MagicMock()
+        mock_subscription = MagicMock()
+        captured_callback = None
+
+        async def capture_subscribe(inbox, callback):
+            nonlocal captured_callback
+            captured_callback = callback
+            return mock_subscription
+
+        mock_strategy.subscribe = AsyncMock(side_effect=capture_subscribe)
+        mock_strategy.unsubscribe = AsyncMock()
+
+        inbox = Inbox(
+            email_address="test@example.com",
+            expires_at=datetime.now(timezone.utc),
+            inbox_hash="test-hash",
+            server_sig_pk="test-server-pk",
+            _keypair=keypair,
+            _api_client=mock_api_client,
+            _strategy=mock_strategy,
+        )
+
+        # Mock list_emails to return empty list initially
+        inbox.list_emails = AsyncMock(return_value=[])
+
+        from vaultsandbox.types import WaitForEmailOptions
+
+        # Start wait_for_email with a short timeout
+        task = asyncio.create_task(inbox.wait_for_email(WaitForEmailOptions(timeout=5000)))
+
+        # Give the task a moment to set up
+        await asyncio.sleep(0.01)
+
+        # Simulate a new email arriving that matches the filter
+        # This exercises lines 180-181 (matches_filter check and set_result)
+        if captured_callback:
+            mock_new_email = MagicMock()
+            mock_new_email.id = "email-new"
+            mock_new_email.subject = "New Email"
+            mock_new_email.from_address = "sender@example.com"
+            await captured_callback(mock_new_email)
+
+        result = await task
+        assert result.id == "email-new"
+
+    @pytest.mark.asyncio
+    async def test_wait_for_email_timeout(self) -> None:
+        """Test wait_for_email raises TimeoutError when no match found."""
+        keypair = generate_keypair()
+        mock_api_client = MagicMock()
+        mock_strategy = MagicMock()
+        mock_subscription = MagicMock()
+        mock_strategy.subscribe = AsyncMock(return_value=mock_subscription)
+        mock_strategy.unsubscribe = AsyncMock()
+
+        inbox = Inbox(
+            email_address="test@example.com",
+            expires_at=datetime.now(timezone.utc),
+            inbox_hash="test-hash",
+            server_sig_pk="test-server-pk",
+            _keypair=keypair,
+            _api_client=mock_api_client,
+            _strategy=mock_strategy,
+        )
+
+        # Mock list_emails to return empty list
+        inbox.list_emails = AsyncMock(return_value=[])
+
+        from vaultsandbox.errors import TimeoutError
+        from vaultsandbox.types import WaitForEmailOptions
+
+        with pytest.raises(TimeoutError, match="Timeout waiting for email"):
+            await inbox.wait_for_email(WaitForEmailOptions(timeout=100))

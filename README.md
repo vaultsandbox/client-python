@@ -35,7 +35,7 @@ Stop mocking your email stack. If your app sends real emails in production, it m
 
 - **Quantum-Safe Encryption** — Automatic ML-KEM-768 (Kyber768) key encapsulation + AES-256-GCM encryption
 - **Zero Crypto Knowledge Required** — All cryptographic operations are invisible to the user
-- **Real-Time Email Delivery** — SSE-based delivery with smart polling fallback
+- **Real-Time Email Delivery** — SSE-based delivery with polling alternative
 - **Built for CI/CD** — Deterministic tests without sleeps, polling, or flakiness
 - **Full Email Access** — Decrypt and access email content, headers, links, and attachments
 - **Email Authentication** — Built-in SPF/DKIM/DMARC validation helpers
@@ -85,7 +85,7 @@ client = VaultSandboxClient(
     timeout=30000,                              # HTTP timeout in ms
     max_retries=3,                              # Retry attempts
     retry_delay=1000,                           # Initial retry delay in ms
-    strategy=DeliveryStrategyType.AUTO,         # SSE, POLLING, or AUTO
+    strategy=DeliveryStrategyType.SSE,          # SSE or POLLING
 )
 ```
 
@@ -294,7 +294,7 @@ VaultSandboxClient(
     timeout: int = 30000,
     max_retries: int = 3,
     retry_delay: int = 1000,
-    strategy: DeliveryStrategyType = DeliveryStrategyType.AUTO,
+    strategy: DeliveryStrategyType = DeliveryStrategyType.SSE,
 )
 ```
 
@@ -305,7 +305,7 @@ VaultSandboxClient(
 - `timeout: int` - HTTP timeout in ms (default: 30000)
 - `max_retries: int` - Max retry attempts for HTTP requests (default: 3)
 - `retry_delay: int` - Delay in ms between retry attempts (default: 1000)
-- `strategy: DeliveryStrategyType` - Delivery strategy: SSE, POLLING, or AUTO (default: AUTO)
+- `strategy: DeliveryStrategyType` - Delivery strategy: SSE or POLLING (default: SSE)
 
 #### Methods
 

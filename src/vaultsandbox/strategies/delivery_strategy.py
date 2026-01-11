@@ -67,7 +67,7 @@ class DeliveryStrategy(ABC):
         Returns:
             A Subscription instance for managing the subscription.
         """
-        pass
+        pass  # pragma: no cover
 
     @abstractmethod
     async def unsubscribe(self, subscription: Subscription) -> None:
@@ -76,9 +76,9 @@ class DeliveryStrategy(ABC):
         Args:
             subscription: The subscription to cancel.
         """
-        pass
+        pass  # pragma: no cover
 
     @abstractmethod
     async def close(self) -> None:
         """Close the strategy and clean up resources."""
-        pass
+        pass  # pragma: no cover

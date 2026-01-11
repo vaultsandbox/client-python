@@ -69,6 +69,10 @@ class SSEStrategy(DeliveryStrategy):
             SSEError: If the SSE connection fails or times out.
         """
         subscription = Subscription(inbox=inbox, callback=callback)
+
+        # Track existing subscriptions before adding new one (for sync after reconnect)
+        existing_subscriptions = list(self._subscriptions.values())
+
         self._subscriptions[inbox.email_address] = subscription
         self._inbox_hash_map[inbox.inbox_hash] = inbox.email_address
 
@@ -92,6 +96,11 @@ class SSEStrategy(DeliveryStrategy):
                 del self._inbox_hash_map[inbox.inbox_hash]
                 raise self._error
 
+        # Sync existing subscriptions to catch emails during SSE disconnect window
+        # Per plan-sync.md: after reconnecting SSE, sync all inboxes to catch missed emails
+        if existing_subscriptions:
+            await self._sync_subscriptions(existing_subscriptions)
+
         return subscription
 
     async def unsubscribe(self, subscription: Subscription) -> None:
@@ -111,7 +120,20 @@ class SSEStrategy(DeliveryStrategy):
 
         # Reconnect SSE without this inbox (or close if no subscriptions)
         if self._subscriptions:
+            # Track remaining subscriptions for sync after reconnect
+            remaining_subscriptions = list(self._subscriptions.values())
             await self._reconnect_sse()
+
+            # Wait for SSE connection before syncing
+            if self._connected_event:
+                try:
+                    await asyncio.wait_for(self._connected_event.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    logger.debug("SSE reconnection timed out during unsubscribe")
+
+            # Sync remaining subscriptions to catch emails during disconnect
+            if remaining_subscriptions:
+                await self._sync_subscriptions(remaining_subscriptions)
         else:
             await self._close_sse()
 
@@ -263,3 +285,71 @@ class SSEStrategy(DeliveryStrategy):
             logger.debug("Failed to parse SSE event as JSON: %s", e)
         except Exception as e:
             logger.debug("Error handling SSE event: %s", e, exc_info=True)
+
+    async def _sync_subscriptions(self, subscriptions: list[Subscription]) -> None:
+        """Sync subscriptions to catch emails during SSE disconnect window.
+
+        Per plan-sync.md: after SSE reconnection, we must check for emails
+        that arrived during the disconnect window. This uses the hash-based
+        sync approach - fetch email list and process any unseen emails.
+
+        Args:
+            subscriptions: List of subscriptions to sync.
+        """
+        # Sync all subscriptions in parallel for efficiency
+        await asyncio.gather(
+            *[self._sync_subscription(sub) for sub in subscriptions],
+            return_exceptions=True,
+        )
+
+    async def _sync_subscription(self, subscription: Subscription) -> None:
+        """Sync a single subscription to catch missed emails.
+
+        Args:
+            subscription: The subscription to sync.
+        """
+        inbox = subscription.inbox
+
+        try:
+            # Get list of emails from server (metadata only for efficiency)
+            emails_response = await self._api_client.list_emails(
+                inbox.email_address, include_content=False
+            )
+
+            # Process emails we haven't seen yet
+            for email_data in emails_response:
+                email_id = email_data["id"]
+
+                # Skip already seen emails (deduplication)
+                if subscription.has_seen(email_id):
+                    continue
+
+                subscription.mark_seen(email_id)
+
+                # Fetch full email and fire callback
+                try:
+                    email_response = await self._api_client.get_email(inbox.email_address, email_id)
+
+                    from ..email import Email
+
+                    email = Email._from_response(email_response, inbox)
+
+                    # Call callback (handle both sync and async)
+                    result = subscription.callback(email)
+                    if asyncio.iscoroutine(result):
+                        await result
+
+                except Exception as e:
+                    logger.debug(
+                        "Error fetching/processing email %s during sync: %s",
+                        email_id,
+                        e,
+                    )
+
+        except Exception as e:
+            logger.debug(
+                "Error syncing subscription for %s: %s",
+                inbox.email_address,
+                e,
+                exc_info=True,
+            )

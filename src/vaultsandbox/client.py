@@ -169,7 +169,7 @@ class VaultSandboxClient:
         max_retries: int = DEFAULT_MAX_RETRIES,
         retry_delay: int = DEFAULT_RETRY_DELAY_MS,
         retry_on_status_codes: tuple[int, ...] | None = None,
-        strategy: DeliveryStrategyType = DeliveryStrategyType.AUTO,
+        strategy: DeliveryStrategyType = DeliveryStrategyType.SSE,
         polling_interval: int = DEFAULT_POLLING_INTERVAL_MS,
         polling_max_backoff: int = DEFAULT_POLLING_MAX_BACKOFF_MS,
         sse_reconnect_interval: int = DEFAULT_SSE_RECONNECT_INTERVAL_MS,
@@ -185,7 +185,7 @@ class VaultSandboxClient:
             retry_delay: Initial retry delay in milliseconds.
             retry_on_status_codes: HTTP status codes that trigger retries.
                 Default: (408, 429, 500, 502, 503, 504)
-            strategy: Delivery strategy type (sse, polling, or auto).
+            strategy: Delivery strategy type (sse or polling).
             polling_interval: Polling interval in milliseconds (default: 2000).
             polling_max_backoff: Maximum backoff delay in milliseconds (default: 30000).
             sse_reconnect_interval: SSE reconnection interval in milliseconds (default: 5000).
@@ -243,10 +243,6 @@ class VaultSandboxClient:
             A DeliveryStrategy instance.
         """
         strategy_type = self._config.strategy
-
-        # Auto defaults to SSE (always available on server)
-        if strategy_type == DeliveryStrategyType.AUTO:
-            strategy_type = DeliveryStrategyType.SSE
 
         if strategy_type == DeliveryStrategyType.SSE:
             return SSEStrategy(self._api_client, self._sse_config)
@@ -338,6 +334,11 @@ class VaultSandboxClient:
 
     async def delete_all_inboxes(self) -> int:
         """Delete all inboxes for the API key.
+
+        Warning:
+            This method should never be called during integration tests as it
+            deletes ALL inboxes for the API key, which interferes with concurrent
+            test runs and other testing activities.
 
         Returns:
             Number of inboxes deleted.

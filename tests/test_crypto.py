@@ -14,6 +14,11 @@ from vaultsandbox.crypto.constants import (
     MLKEM768_PUBLIC_KEY_SIZE,
     MLKEM768_SECRET_KEY_SIZE,
 )
+from vaultsandbox.crypto.utils import (
+    Base64URLDecodeError,
+    from_base64,
+    to_base64,
+)
 
 
 class TestBase64Url:
@@ -39,6 +44,42 @@ class TestBase64Url:
         encoded = to_base64url(data)
         assert "+" not in encoded
         assert "/" not in encoded
+
+    def test_decode_rejects_plus(self) -> None:
+        """Test that decoding rejects + character."""
+        with pytest.raises(Base64URLDecodeError, match="contains forbidden characters"):
+            from_base64url("abc+def")
+
+    def test_decode_rejects_slash(self) -> None:
+        """Test that decoding rejects / character."""
+        with pytest.raises(Base64URLDecodeError, match="contains forbidden characters"):
+            from_base64url("abc/def")
+
+    def test_decode_rejects_padding(self) -> None:
+        """Test that decoding rejects = padding."""
+        with pytest.raises(Base64URLDecodeError, match="contains forbidden characters"):
+            from_base64url("abc=")
+
+    def test_decode_rejects_invalid_chars(self) -> None:
+        """Test that decoding rejects other invalid characters."""
+        with pytest.raises(Base64URLDecodeError, match="contains non-Base64URL characters"):
+            from_base64url("abc!def")
+
+
+class TestBase64:
+    """Tests for standard base64 encoding/decoding."""
+
+    def test_to_base64(self) -> None:
+        """Test standard base64 encoding."""
+        data = b"Hello, World!"
+        encoded = to_base64(data)
+        assert encoded == "SGVsbG8sIFdvcmxkIQ=="
+
+    def test_from_base64(self) -> None:
+        """Test standard base64 decoding."""
+        encoded = "SGVsbG8sIFdvcmxkIQ=="
+        decoded = from_base64(encoded)
+        assert decoded == b"Hello, World!"
 
 
 class TestKeypair:

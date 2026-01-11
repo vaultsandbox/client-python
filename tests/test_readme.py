@@ -169,17 +169,16 @@ class TestConfiguration:
             timeout=30000,  # HTTP timeout in ms
             max_retries=3,  # Retry attempts
             retry_delay=1000,  # Initial retry delay in ms
-            strategy=DeliveryStrategyType.AUTO,  # SSE, POLLING, or AUTO
+            strategy=DeliveryStrategyType.SSE,  # SSE or POLLING
         )
         assert client is not None
         await client.close()
 
     def test_delivery_strategy_enum_values(self) -> None:
         """Test that DeliveryStrategyType has documented values."""
-        # README documents these three strategies
+        # README documents these two strategies
         assert DeliveryStrategyType.SSE is not None
         assert DeliveryStrategyType.POLLING is not None
-        assert DeliveryStrategyType.AUTO is not None
 
     @pytest.mark.asyncio
     async def test_environment_variable_pattern(self, api_config: dict[str, str]) -> None:
@@ -764,19 +763,6 @@ class TestDeleteInboxes:
             new_inbox = await client.create_inbox()
             assert new_inbox.email_address != email_address
             await new_inbox.delete()
-
-    @pytest.mark.asyncio
-    async def test_delete_all_inboxes(self, api_config: dict[str, str]) -> None:
-        """Test deleting all inboxes for API key."""
-        async with VaultSandboxClient(**api_config) as client:
-            # Create a few inboxes
-            await client.create_inbox()
-            await client.create_inbox()
-
-            # README example: Delete all inboxes for API key
-            deleted_count = await client.delete_all_inboxes()
-
-            assert deleted_count >= 2
 
 
 class TestErrorHandling:

@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.6.1] - 2026-01-11
+
+### Changed
+
+- Default delivery strategy changed from `AUTO` to `SSE`
+- SSE strategy now syncs subscriptions after reconnect to catch emails during disconnect window
+
+### Removed
+
+- `DeliveryStrategyType.AUTO` enum value (use `SSE` or `POLLING` explicitly)
+
 ## [0.6.0] - 2026-01-04
 
 ### Added

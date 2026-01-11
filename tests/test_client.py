@@ -40,7 +40,7 @@ class TestVaultSandboxClientInit:
         assert client._config.max_retries == DEFAULT_MAX_RETRIES
         assert client._config.retry_delay == DEFAULT_RETRY_DELAY_MS
         assert client._config.retry_on_status_codes == DEFAULT_RETRY_STATUS_CODES
-        assert client._config.strategy == DeliveryStrategyType.AUTO
+        assert client._config.strategy == DeliveryStrategyType.SSE
 
     def test_custom_configuration(self) -> None:
         """Test client initializes with custom configuration values."""
@@ -91,10 +91,10 @@ class TestVaultSandboxClientInit:
         assert client._config.retry_delay == 2000
         # Other settings should remain default
         assert client._config.timeout == DEFAULT_TIMEOUT_MS
-        assert client._config.strategy == DeliveryStrategyType.AUTO
+        assert client._config.strategy == DeliveryStrategyType.SSE
 
     def test_custom_strategy_explicit(self) -> None:
-        """Specify polling/SSE/auto strategy explicitly."""
+        """Specify polling/SSE strategy explicitly."""
         client_polling = VaultSandboxClient(
             api_key="test-key",
             strategy=DeliveryStrategyType.POLLING,
@@ -106,12 +106,6 @@ class TestVaultSandboxClientInit:
             strategy=DeliveryStrategyType.SSE,
         )
         assert client_sse._config.strategy == DeliveryStrategyType.SSE
-
-        client_auto = VaultSandboxClient(
-            api_key="test-key",
-            strategy=DeliveryStrategyType.AUTO,
-        )
-        assert client_auto._config.strategy == DeliveryStrategyType.AUTO
 
     def test_polling_config_custom(self) -> None:
         """Custom polling interval and backoff configuration."""
@@ -132,6 +126,328 @@ class TestVaultSandboxClientInit:
         )
         assert client._sse_config.reconnect_interval == 2000
         assert client._sse_config.max_reconnect_attempts == 15
+
+    def test_create_strategy_returns_polling_strategy(self) -> None:
+        """Test _create_strategy returns PollingStrategy when strategy is POLLING (line 254)."""
+        from vaultsandbox.strategies import PollingStrategy
+
+        client = VaultSandboxClient(
+            api_key="test-key",
+            strategy=DeliveryStrategyType.POLLING,
+        )
+
+        strategy = client._create_strategy()
+
+        assert isinstance(strategy, PollingStrategy)
+
+
+class TestVaultSandboxClientContextManager:
+    """Tests for async context manager methods."""
+
+    @pytest.mark.asyncio
+    async def test_aenter_returns_self(self) -> None:
+        """Test __aenter__ returns the client instance (line 220)."""
+        client = VaultSandboxClient(api_key="test-key")
+        result = await client.__aenter__()
+        assert result is client
+
+    @pytest.mark.asyncio
+    async def test_aexit_calls_close(self) -> None:
+        """Test __aexit__ calls close (line 224)."""
+        client = VaultSandboxClient(api_key="test-key")
+        client.close = AsyncMock()
+        await client.__aexit__(None, None, None)
+        client.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_context_manager_usage(self) -> None:
+        """Test using client as async context manager."""
+        async with VaultSandboxClient(api_key="test-key") as client:
+            assert isinstance(client, VaultSandboxClient)
+
+
+class TestVaultSandboxClientInitialization:
+    """Tests for client initialization methods."""
+
+    @pytest.mark.asyncio
+    async def test_ensure_initialized_fetches_server_info(self) -> None:
+        """Test _ensure_initialized fetches server info and creates strategy (lines 232-237)."""
+        client = VaultSandboxClient(api_key="test-key")
+
+        mock_server_info = MagicMock()
+        mock_server_info.server_sig_pk = "test-pk"
+        client._api_client.get_server_info = AsyncMock(return_value=mock_server_info)
+
+        await client._ensure_initialized()
+
+        assert client._initialized is True
+        assert client._server_info == mock_server_info
+        assert client._strategy is not None
+        client._api_client.get_server_info.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ensure_initialized_skips_if_already_initialized(self) -> None:
+        """Test _ensure_initialized is a no-op if already initialized."""
+        client = VaultSandboxClient(api_key="test-key")
+        client._initialized = True
+        client._api_client.get_server_info = AsyncMock()
+
+        await client._ensure_initialized()
+
+        client._api_client.get_server_info.assert_not_called()
+
+
+class TestVaultSandboxClientClose:
+    """Tests for client close method."""
+
+    @pytest.mark.asyncio
+    async def test_close_clears_inboxes_and_strategy(self) -> None:
+        """Test close clears resources (lines 264-274)."""
+        client = VaultSandboxClient(api_key="test-key")
+
+        # Set up mock strategy
+        mock_strategy = MagicMock()
+        mock_strategy.close = AsyncMock()
+        client._strategy = mock_strategy
+        client._inboxes = {"test@example.com": MagicMock()}
+        client._initialized = True
+
+        await client.close()
+
+        assert len(client._inboxes) == 0
+        assert client._strategy is None
+        assert client._initialized is False
+        mock_strategy.close.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_close_handles_none_strategy(self) -> None:
+        """Test close handles None strategy gracefully."""
+        client = VaultSandboxClient(api_key="test-key")
+        client._strategy = None
+
+        # Should not raise
+        await client.close()
+
+
+class TestVaultSandboxClientCheckKey:
+    """Tests for check_key method."""
+
+    @pytest.mark.asyncio
+    async def test_check_key_returns_api_result(self) -> None:
+        """Test check_key delegates to API client (line 282)."""
+        client = VaultSandboxClient(api_key="test-key")
+        client._api_client.check_key = AsyncMock(return_value=True)
+
+        result = await client.check_key()
+
+        assert result is True
+        client._api_client.check_key.assert_called_once()
+
+
+class TestVaultSandboxClientGetServerInfo:
+    """Tests for get_server_info method."""
+
+    @pytest.mark.asyncio
+    async def test_get_server_info_returns_info(self) -> None:
+        """Test get_server_info returns server info (line 293)."""
+        client = VaultSandboxClient(api_key="test-key")
+
+        mock_server_info = MagicMock()
+        client._server_info = mock_server_info
+        client._initialized = True
+        client._ensure_initialized = AsyncMock()
+
+        result = await client.get_server_info()
+
+        assert result is mock_server_info
+
+
+class TestVaultSandboxClientCreateInbox:
+    """Tests for create_inbox method."""
+
+    @pytest.mark.asyncio
+    async def test_create_inbox_success(self) -> None:
+        """Test create_inbox creates and returns inbox (lines 311-337)."""
+
+        client = VaultSandboxClient(api_key="test-key")
+
+        # Mock the dependencies
+        mock_strategy = MagicMock()
+        client._strategy = mock_strategy
+        client._initialized = True
+        client._ensure_initialized = AsyncMock()
+
+        mock_inbox_data = MagicMock()
+        mock_inbox_data.email_address = "test@example.com"
+        mock_inbox_data.expires_at = "2025-01-01T00:00:00Z"
+        mock_inbox_data.inbox_hash = "test-hash"
+        mock_inbox_data.server_sig_pk = "test-server-pk"
+        client._api_client.create_inbox = AsyncMock(return_value=mock_inbox_data)
+
+        inbox = await client.create_inbox()
+
+        assert inbox.email_address == "test@example.com"
+        assert inbox in client._inboxes.values()
+
+    @pytest.mark.asyncio
+    async def test_create_inbox_with_options(self) -> None:
+        """Test create_inbox passes options to API."""
+        from vaultsandbox.types import CreateInboxOptions
+
+        client = VaultSandboxClient(api_key="test-key")
+
+        mock_strategy = MagicMock()
+        client._strategy = mock_strategy
+        client._initialized = True
+        client._ensure_initialized = AsyncMock()
+
+        mock_inbox_data = MagicMock()
+        mock_inbox_data.email_address = "custom@example.com"
+        mock_inbox_data.expires_at = "2025-01-01T00:00:00Z"
+        mock_inbox_data.inbox_hash = "test-hash"
+        mock_inbox_data.server_sig_pk = "test-server-pk"
+        client._api_client.create_inbox = AsyncMock(return_value=mock_inbox_data)
+
+        options = CreateInboxOptions(ttl=3600, email_address="custom@example.com")
+        await client.create_inbox(options)
+
+        client._api_client.create_inbox.assert_called_once()
+        call_kwargs = client._api_client.create_inbox.call_args.kwargs
+        assert call_kwargs["ttl"] == 3600
+        assert call_kwargs["email_address"] == "custom@example.com"
+
+
+class TestVaultSandboxClientDeleteAllInboxes:
+    """Tests for delete_all_inboxes method."""
+
+    @pytest.mark.asyncio
+    async def test_delete_all_inboxes_clears_cache_and_calls_api(self) -> None:
+        """Test delete_all_inboxes clears cache and calls API (lines 346-348)."""
+        client = VaultSandboxClient(api_key="test-key")
+        client._inboxes = {"test@example.com": MagicMock()}
+        client._api_client.delete_all_inboxes = AsyncMock(return_value=5)
+
+        result = await client.delete_all_inboxes()
+
+        assert result == 5
+        assert len(client._inboxes) == 0
+        client._api_client.delete_all_inboxes.assert_called_once()
+
+
+class TestVaultSandboxClientExportToFile:
+    """Tests for export_inbox_to_file method."""
+
+    @pytest.mark.asyncio
+    async def test_export_inbox_to_file(self, tmp_path) -> None:
+        """Test export_inbox_to_file writes JSON file (lines 414-427)."""
+        import json
+
+        from vaultsandbox.crypto import generate_keypair, to_base64url
+
+        client = VaultSandboxClient(api_key="test-key")
+
+        keypair = generate_keypair()
+        mock_inbox = MagicMock()
+        mock_inbox.email_address = "test@example.com"
+        mock_inbox.export.return_value = ExportedInbox(
+            version=1,
+            email_address="test@example.com",
+            inbox_hash="test-hash",
+            expires_at="2025-01-01T00:00:00Z",
+            server_sig_pk="server-pk",
+            secret_key=to_base64url(keypair.secret_key),
+            exported_at="2025-01-01T12:00:00Z",
+        )
+
+        client._inboxes["test@example.com"] = mock_inbox
+
+        file_path = tmp_path / "exported_inbox.json"
+        await client.export_inbox_to_file(mock_inbox, file_path)
+
+        # Verify file was written with correct camelCase keys
+        data = json.loads(file_path.read_text())
+        assert data["version"] == 1
+        assert data["emailAddress"] == "test@example.com"
+        assert data["inboxHash"] == "test-hash"
+        assert data["serverSigPk"] == "server-pk"
+        assert "secretKey" in data
+        assert data["exportedAt"] == "2025-01-01T12:00:00Z"
+
+
+class TestImportInboxSuccess:
+    """Tests for successful import_inbox scenarios."""
+
+    @pytest.mark.asyncio
+    async def test_import_inbox_success(self) -> None:
+        """Test import_inbox creates inbox from exported data (lines 473-487, 523)."""
+        from vaultsandbox.crypto import generate_keypair, to_base64url
+
+        client = VaultSandboxClient(api_key="test-key")
+        mock_strategy = MagicMock()
+        mock_server_info = MagicMock()
+
+        keypair = generate_keypair()
+        server_sig_pk = to_base64url(b"\x00" * 1952)
+        mock_server_info.server_sig_pk = server_sig_pk
+
+        client._strategy = mock_strategy
+        client._server_info = mock_server_info
+        client._initialized = True
+
+        exported_data = ExportedInbox(
+            version=1,
+            email_address="test@example.com",
+            expires_at="2025-01-01T00:00:00Z",
+            inbox_hash="test-hash",
+            server_sig_pk=server_sig_pk,
+            secret_key=to_base64url(keypair.secret_key),
+            exported_at="2025-01-01T00:00:00Z",
+        )
+
+        inbox = await client.import_inbox(exported_data)
+
+        assert inbox.email_address == "test@example.com"
+        assert inbox.inbox_hash == "test-hash"
+        assert "test@example.com" in client._inboxes
+
+    @pytest.mark.asyncio
+    async def test_import_inbox_from_file_success(self, tmp_path) -> None:
+        """Test import_inbox_from_file returns inbox (line 523)."""
+        import json
+
+        from vaultsandbox.crypto import generate_keypair, to_base64url
+
+        client = VaultSandboxClient(api_key="test-key")
+        mock_strategy = MagicMock()
+        mock_server_info = MagicMock()
+
+        keypair = generate_keypair()
+        server_sig_pk = to_base64url(b"\x00" * 1952)
+        mock_server_info.server_sig_pk = server_sig_pk
+
+        client._strategy = mock_strategy
+        client._server_info = mock_server_info
+        client._initialized = True
+
+        # Create valid JSON file
+        file_path = tmp_path / "inbox.json"
+        file_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "emailAddress": "test@example.com",
+                    "expiresAt": "2025-01-01T00:00:00Z",
+                    "inboxHash": "test-hash",
+                    "serverSigPk": server_sig_pk,
+                    "secretKey": to_base64url(keypair.secret_key),
+                    "exportedAt": "2025-01-01T00:00:00Z",
+                }
+            )
+        )
+
+        inbox = await client.import_inbox_from_file(file_path)
+
+        assert inbox.email_address == "test@example.com"
 
 
 class TestVaultSandboxClientExportImport:
@@ -244,6 +560,69 @@ class TestInboxMonitor:
 
         assert result is monitor
         assert callback in monitor._callbacks
+
+    @pytest.mark.asyncio
+    async def test_start_calls_async_callbacks(self) -> None:
+        """Test that async callbacks are awaited properly (lines 126-127)."""
+        mock_strategy = MagicMock()
+        mock_inbox = MagicMock()
+
+        # Track if async callback was called
+        callback_called = False
+
+        async def async_callback(inbox, email):
+            nonlocal callback_called
+            callback_called = True
+
+        # Mock on_new_email to capture the handler
+        captured_handler = None
+
+        async def capture_handler(handler):
+            nonlocal captured_handler
+            captured_handler = handler
+            return MagicMock()
+
+        mock_inbox.on_new_email = capture_handler
+
+        monitor = InboxMonitor(inboxes=[mock_inbox], strategy=mock_strategy)
+        monitor.on_email(async_callback)
+
+        await monitor.start()
+
+        # Trigger the captured handler with a mock email
+        mock_email = MagicMock()
+        await captured_handler(mock_email)
+
+        assert callback_called
+
+    @pytest.mark.asyncio
+    async def test_start_handles_callback_exception(self) -> None:
+        """Test that exceptions in callbacks are logged but don't stop processing (lines 128-129)."""
+        mock_strategy = MagicMock()
+        mock_inbox = MagicMock()
+
+        # Callback that raises an exception
+        def bad_callback(inbox, email):
+            raise ValueError("Test error")
+
+        # Mock on_new_email to capture the handler
+        captured_handler = None
+
+        async def capture_handler(handler):
+            nonlocal captured_handler
+            captured_handler = handler
+            return MagicMock()
+
+        mock_inbox.on_new_email = capture_handler
+
+        monitor = InboxMonitor(inboxes=[mock_inbox], strategy=mock_strategy)
+        monitor.on_email(bad_callback)
+
+        await monitor.start()
+
+        # Trigger the captured handler - should not raise
+        mock_email = MagicMock()
+        await captured_handler(mock_email)  # Exception is caught and logged
 
     def test_on_email_chains_multiple_callbacks(self) -> None:
         """Test multiple callbacks can be chained."""
@@ -578,3 +957,354 @@ class TestExportInbox:
         # Should parse without error
         datetime.fromisoformat(exported.expires_at.replace("Z", "+00:00"))
         datetime.fromisoformat(exported.exported_at.replace("Z", "+00:00"))
+
+
+class TestDeleteInbox:
+    """Tests for delete_inbox functionality."""
+
+    @pytest.mark.asyncio
+    async def test_delete_inbox_removes_from_cache_and_calls_api(self) -> None:
+        """Test delete_inbox removes from local cache and calls API (lines 357-359)."""
+        client = VaultSandboxClient(api_key="test-key")
+        client._api_client.delete_inbox = AsyncMock()
+
+        # Add a mock inbox to the cache
+        mock_inbox = MagicMock()
+        client._inboxes["test@example.com"] = mock_inbox
+
+        await client.delete_inbox("test@example.com")
+
+        # Verify removed from local cache
+        assert "test@example.com" not in client._inboxes
+        # Verify API was called
+        client._api_client.delete_inbox.assert_called_once_with("test@example.com")
+
+    @pytest.mark.asyncio
+    async def test_delete_inbox_not_in_cache_still_calls_api(self) -> None:
+        """Test delete_inbox works even if inbox not in local cache."""
+        client = VaultSandboxClient(api_key="test-key")
+        client._api_client.delete_inbox = AsyncMock()
+
+        # Call delete for an inbox not in local cache
+        await client.delete_inbox("notcached@example.com")
+
+        # Verify API was still called
+        client._api_client.delete_inbox.assert_called_once_with("notcached@example.com")
+
+
+class TestImportValidationErrors:
+    """Tests for import data validation errors."""
+
+    @pytest.mark.asyncio
+    async def test_import_unsupported_version(self) -> None:
+        """Test import with unsupported version raises UnsupportedVersionError (line 547)."""
+        from vaultsandbox.errors import UnsupportedVersionError
+
+        client = VaultSandboxClient(api_key="test-key")
+        client._strategy = MagicMock()
+        client._server_info = MagicMock()
+        client._initialized = True
+
+        with pytest.raises(UnsupportedVersionError, match="Unsupported export version"):
+            await client.import_inbox(
+                ExportedInbox(
+                    version=999,  # Unsupported version
+                    email_address="test@example.com",
+                    expires_at="2025-01-01T00:00:00Z",
+                    inbox_hash="hash",
+                    server_sig_pk="pk",
+                    secret_key="sk",
+                    exported_at="2025-01-01T00:00:00Z",
+                )
+            )
+
+    @pytest.mark.asyncio
+    async def test_import_missing_expires_at(self) -> None:
+        """Test import with missing expiresAt raises InvalidImportDataError (line 555)."""
+        client = VaultSandboxClient(api_key="test-key")
+        client._strategy = MagicMock()
+        client._server_info = MagicMock()
+        client._initialized = True
+
+        with pytest.raises(InvalidImportDataError, match="Missing expiresAt"):
+            await client.import_inbox(
+                ExportedInbox(
+                    version=1,
+                    email_address="test@example.com",
+                    expires_at="",  # Empty
+                    inbox_hash="hash",
+                    server_sig_pk="pk",
+                    secret_key="sk",
+                    exported_at="2025-01-01T00:00:00Z",
+                )
+            )
+
+    @pytest.mark.asyncio
+    async def test_import_missing_server_sig_pk(self) -> None:
+        """Test import with missing serverSigPk raises InvalidImportDataError (line 559)."""
+        client = VaultSandboxClient(api_key="test-key")
+        client._strategy = MagicMock()
+        client._server_info = MagicMock()
+        client._initialized = True
+
+        with pytest.raises(InvalidImportDataError, match="Missing serverSigPk"):
+            await client.import_inbox(
+                ExportedInbox(
+                    version=1,
+                    email_address="test@example.com",
+                    expires_at="2025-01-01T00:00:00Z",
+                    inbox_hash="hash",
+                    server_sig_pk="",  # Empty
+                    secret_key="sk",
+                    exported_at="2025-01-01T00:00:00Z",
+                )
+            )
+
+    @pytest.mark.asyncio
+    async def test_import_missing_secret_key(self) -> None:
+        """Test import with missing secretKey raises InvalidImportDataError (line 561)."""
+        client = VaultSandboxClient(api_key="test-key")
+        client._strategy = MagicMock()
+        client._server_info = MagicMock()
+        client._initialized = True
+
+        with pytest.raises(InvalidImportDataError, match="Missing secretKey"):
+            await client.import_inbox(
+                ExportedInbox(
+                    version=1,
+                    email_address="test@example.com",
+                    expires_at="2025-01-01T00:00:00Z",
+                    inbox_hash="hash",
+                    server_sig_pk="pk",
+                    secret_key="",  # Empty
+                    exported_at="2025-01-01T00:00:00Z",
+                )
+            )
+
+    @pytest.mark.asyncio
+    async def test_import_invalid_email_no_at_symbol(self) -> None:
+        """Test import with email without @ raises InvalidImportDataError (line 566)."""
+        client = VaultSandboxClient(api_key="test-key")
+        client._strategy = MagicMock()
+        client._server_info = MagicMock()
+        client._initialized = True
+
+        with pytest.raises(InvalidImportDataError, match="Invalid emailAddress"):
+            await client.import_inbox(
+                ExportedInbox(
+                    version=1,
+                    email_address="testexample.com",  # No @ symbol
+                    expires_at="2025-01-01T00:00:00Z",
+                    inbox_hash="hash",
+                    server_sig_pk="pk",
+                    secret_key="sk",
+                    exported_at="2025-01-01T00:00:00Z",
+                )
+            )
+
+    @pytest.mark.asyncio
+    async def test_import_invalid_email_multiple_at_symbols(self) -> None:
+        """Test import with email with multiple @ raises InvalidImportDataError."""
+        client = VaultSandboxClient(api_key="test-key")
+        client._strategy = MagicMock()
+        client._server_info = MagicMock()
+        client._initialized = True
+
+        with pytest.raises(InvalidImportDataError, match="Invalid emailAddress"):
+            await client.import_inbox(
+                ExportedInbox(
+                    version=1,
+                    email_address="test@@example.com",  # Multiple @ symbols
+                    expires_at="2025-01-01T00:00:00Z",
+                    inbox_hash="hash",
+                    server_sig_pk="pk",
+                    secret_key="sk",
+                    exported_at="2025-01-01T00:00:00Z",
+                )
+            )
+
+    @pytest.mark.asyncio
+    async def test_import_invalid_server_sig_pk_length(self) -> None:
+        """Test import with wrong serverSigPk length raises InvalidImportDataError (lines 589-592)."""
+        from vaultsandbox.crypto import generate_keypair, to_base64url
+
+        client = VaultSandboxClient(api_key="test-key")
+        client._strategy = MagicMock()
+        client._server_info = MagicMock()
+        client._initialized = True
+
+        keypair = generate_keypair()
+
+        with pytest.raises(InvalidImportDataError, match="Invalid serverSigPk length"):
+            await client.import_inbox(
+                ExportedInbox(
+                    version=1,
+                    email_address="test@example.com",
+                    expires_at="2025-01-01T00:00:00Z",
+                    inbox_hash="hash",
+                    server_sig_pk=to_base64url(b"tooshort"),  # Wrong length
+                    secret_key=to_base64url(keypair.secret_key),
+                    exported_at="2025-01-01T00:00:00Z",
+                )
+            )
+
+    @pytest.mark.asyncio
+    async def test_import_invalid_server_sig_pk_encoding(self) -> None:
+        """Test import with invalid serverSigPk encoding raises InvalidImportDataError (lines 593-596)."""
+        from vaultsandbox.crypto import generate_keypair, to_base64url
+
+        client = VaultSandboxClient(api_key="test-key")
+        client._strategy = MagicMock()
+        client._server_info = MagicMock()
+        client._initialized = True
+
+        keypair = generate_keypair()
+
+        with pytest.raises(InvalidImportDataError, match="Invalid serverSigPk encoding"):
+            await client.import_inbox(
+                ExportedInbox(
+                    version=1,
+                    email_address="test@example.com",
+                    expires_at="2025-01-01T00:00:00Z",
+                    inbox_hash="hash",
+                    server_sig_pk="not!valid!base64!!!",  # Invalid encoding
+                    secret_key=to_base64url(keypair.secret_key),
+                    exported_at="2025-01-01T00:00:00Z",
+                )
+            )
+
+    @pytest.mark.asyncio
+    async def test_import_invalid_expires_at_format(self) -> None:
+        """Test import with invalid expiresAt format raises InvalidImportDataError (lines 601-602)."""
+        from vaultsandbox.crypto import generate_keypair, to_base64url
+
+        client = VaultSandboxClient(api_key="test-key")
+        client._strategy = MagicMock()
+        mock_server_info = MagicMock()
+        server_sig_pk = to_base64url(b"\x00" * 1952)
+        mock_server_info.server_sig_pk = server_sig_pk
+        client._server_info = mock_server_info
+        client._initialized = True
+
+        keypair = generate_keypair()
+
+        with pytest.raises(InvalidImportDataError, match="Invalid expiresAt format"):
+            await client.import_inbox(
+                ExportedInbox(
+                    version=1,
+                    email_address="test@example.com",
+                    expires_at="not-a-valid-timestamp",  # Invalid format
+                    inbox_hash="hash",
+                    server_sig_pk=server_sig_pk,
+                    secret_key=to_base64url(keypair.secret_key),
+                    exported_at="2025-01-01T00:00:00Z",
+                )
+            )
+
+    @pytest.mark.asyncio
+    async def test_import_invalid_exported_at_format(self) -> None:
+        """Test import with invalid exportedAt format raises InvalidImportDataError (lines 607-608)."""
+        from vaultsandbox.crypto import generate_keypair, to_base64url
+
+        client = VaultSandboxClient(api_key="test-key")
+        client._strategy = MagicMock()
+        mock_server_info = MagicMock()
+        server_sig_pk = to_base64url(b"\x00" * 1952)
+        mock_server_info.server_sig_pk = server_sig_pk
+        client._server_info = mock_server_info
+        client._initialized = True
+
+        keypair = generate_keypair()
+
+        with pytest.raises(InvalidImportDataError, match="Invalid exportedAt format"):
+            await client.import_inbox(
+                ExportedInbox(
+                    version=1,
+                    email_address="test@example.com",
+                    expires_at="2025-01-01T00:00:00Z",
+                    inbox_hash="hash",
+                    server_sig_pk=server_sig_pk,
+                    secret_key=to_base64url(keypair.secret_key),
+                    exported_at="not-a-valid-timestamp",  # Invalid format
+                )
+            )
+
+    @pytest.mark.asyncio
+    async def test_import_invalid_keypair(self) -> None:
+        """Test import with invalid keypair raises InvalidImportDataError (line 470)."""
+        from unittest.mock import patch
+
+        from vaultsandbox.crypto import to_base64url
+
+        client = VaultSandboxClient(api_key="test-key")
+        client._strategy = MagicMock()
+        mock_server_info = MagicMock()
+        server_sig_pk = to_base64url(b"\x00" * 1952)
+        mock_server_info.server_sig_pk = server_sig_pk
+        client._server_info = mock_server_info
+        client._initialized = True
+
+        # Create a fake secret key with correct size but invalid content
+        # ML-KEM secret key size is 2400 bytes
+        fake_secret_key = to_base64url(b"\x00" * 2400)
+
+        # Mock validate_keypair to return False
+        with (
+            patch("vaultsandbox.client.validate_keypair", return_value=False),
+            pytest.raises(InvalidImportDataError, match="Invalid keypair"),
+        ):
+            await client.import_inbox(
+                ExportedInbox(
+                    version=1,
+                    email_address="test@example.com",
+                    expires_at="2025-01-01T00:00:00Z",
+                    inbox_hash="hash",
+                    server_sig_pk=server_sig_pk,
+                    secret_key=fake_secret_key,
+                    exported_at="2025-01-01T00:00:00Z",
+                )
+            )
+
+
+class TestImportInboxFromFile:
+    """Tests for import_inbox_from_file functionality."""
+
+    @pytest.mark.asyncio
+    async def test_import_from_file_invalid_json(self, tmp_path) -> None:
+        """Test import from file with invalid JSON raises InvalidImportDataError (lines 506-507)."""
+        # Create a file with invalid JSON
+        file_path = tmp_path / "invalid.json"
+        file_path.write_text("{ invalid json }")
+
+        client = VaultSandboxClient(api_key="test-key")
+        client._strategy = MagicMock()
+        client._server_info = MagicMock()
+        client._initialized = True
+
+        with pytest.raises(InvalidImportDataError, match="Invalid JSON"):
+            await client.import_inbox_from_file(file_path)
+
+    @pytest.mark.asyncio
+    async def test_import_from_file_missing_required_field(self, tmp_path) -> None:
+        """Test import from file with missing field raises InvalidImportDataError (lines 520-521)."""
+        import json
+
+        # Create a file with valid JSON but missing required fields
+        file_path = tmp_path / "missing_field.json"
+        file_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "emailAddress": "test@example.com",
+                    # Missing expiresAt, inboxHash, serverSigPk, secretKey
+                }
+            )
+        )
+
+        client = VaultSandboxClient(api_key="test-key")
+        client._strategy = MagicMock()
+        client._server_info = MagicMock()
+        client._initialized = True
+
+        with pytest.raises(InvalidImportDataError, match="Missing required field"):
+            await client.import_inbox_from_file(file_path)

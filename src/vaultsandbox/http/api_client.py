@@ -132,11 +132,13 @@ class ApiClient:
                 raise NetworkError(f"Network error: {e}") from e
 
         # Should not reach here, but just in case
-        if last_error:
+        if last_error:  # pragma: no cover
             raise NetworkError(
                 f"Request failed after {self.config.max_retries} retries"
             ) from last_error
-        raise NetworkError(f"Request failed after {self.config.max_retries} retries")
+        raise NetworkError(
+            f"Request failed after {self.config.max_retries} retries"
+        )  # pragma: no cover
 
     def _handle_error_response(self, response: httpx.Response) -> None:
         """Handle HTTP error responses.
@@ -238,8 +240,11 @@ class ApiClient:
         encoded = _encode_path_segment(email_address)
         await self._request("DELETE", f"/api/inboxes/{encoded}")
 
-    async def delete_all_inboxes(self) -> int:
+    async def delete_all_inboxes(self) -> int:  # pragma: no cover
         """Delete all inboxes for the API key.
+
+        Note: Not tested in integration tests as it would interfere with
+        concurrent test runs by deleting all inboxes for the API key.
 
         Returns:
             Number of inboxes deleted.

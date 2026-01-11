@@ -15,7 +15,6 @@ class DeliveryStrategyType(str, Enum):
 
     SSE = "sse"
     POLLING = "polling"
-    AUTO = "auto"
 
 
 @dataclass
@@ -38,7 +37,7 @@ class ClientConfig:
     max_retries: int = 3
     retry_delay: int = 1000
     retry_on_status_codes: tuple[int, ...] = (408, 429, 500, 502, 503, 504)
-    strategy: DeliveryStrategyType = DeliveryStrategyType.AUTO
+    strategy: DeliveryStrategyType = DeliveryStrategyType.SSE
 
 
 @dataclass

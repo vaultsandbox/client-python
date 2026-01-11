@@ -188,18 +188,6 @@ class TestInboxLifecycle:
 
             # Inbox should no longer be accessible (would need to verify via list)
 
-    @pytest.mark.asyncio
-    async def test_delete_all_inboxes(self, api_config: dict[str, str]) -> None:
-        """Test deleting all inboxes."""
-        async with VaultSandboxClient(**api_config) as client:
-            # Create a few inboxes
-            await client.create_inbox()
-            await client.create_inbox()
-
-            # Delete all
-            deleted_count = await client.delete_all_inboxes()
-            assert deleted_count >= 2
-
 
 class TestEmailReceiving:
     """Tests for receiving and reading emails."""
