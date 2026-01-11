@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import sys
 from typing import Any
 from unittest.mock import patch
 
@@ -277,9 +278,11 @@ class TestDecrypt:
 
         payload, _ = create_valid_payload(plaintext, keypair.public_key)
 
+        decrypt_module = sys.modules["vaultsandbox.crypto.decrypt"]
         with (
-            patch(
-                "vaultsandbox.crypto.decrypt.verify_signature",
+            patch.object(
+                decrypt_module,
+                "verify_signature",
                 side_effect=SignatureVerificationError("Signature verification failed"),
             ),
             pytest.raises(SignatureVerificationError),
@@ -324,9 +327,11 @@ class TestDecrypt:
 
         payload, _ = create_valid_payload(plaintext, keypair.public_key)
 
+        decrypt_module = sys.modules["vaultsandbox.crypto.decrypt"]
         with (
-            patch(
-                "vaultsandbox.crypto.decrypt.mlkem_decapsulate",
+            patch.object(
+                decrypt_module,
+                "mlkem_decapsulate",
                 side_effect=RuntimeError("Unexpected error"),
             ),
             pytest.raises(DecryptionError, match="Decryption failed"),
@@ -341,9 +346,11 @@ class TestDecrypt:
         payload, _ = create_valid_payload(plaintext, keypair.public_key)
 
         # Mock derive_key to raise DecryptionError directly
+        decrypt_module = sys.modules["vaultsandbox.crypto.decrypt"]
         with (
-            patch(
-                "vaultsandbox.crypto.decrypt.derive_key",
+            patch.object(
+                decrypt_module,
+                "derive_key",
                 side_effect=DecryptionError("Key derivation failed"),
             ),
             pytest.raises(DecryptionError, match="Key derivation failed"),
@@ -416,9 +423,11 @@ class TestDecryptJson:
 
         payload, _ = create_valid_payload(plaintext, keypair.public_key)
 
+        decrypt_module = sys.modules["vaultsandbox.crypto.decrypt"]
         with (
-            patch(
-                "vaultsandbox.crypto.decrypt.verify_signature",
+            patch.object(
+                decrypt_module,
+                "verify_signature",
                 side_effect=SignatureVerificationError("Signature verification failed"),
             ),
             pytest.raises(SignatureVerificationError),
