@@ -19,6 +19,7 @@ async def create_inbox(client: VaultSandboxClient) -> None:
         "emailAddress": exported.email_address,
         "expiresAt": exported.expires_at,
         "inboxHash": exported.inbox_hash,
+        "encrypted": exported.encrypted,
         "serverSigPk": exported.server_sig_pk,
         "secretKey": exported.secret_key,
         "exportedAt": exported.exported_at,

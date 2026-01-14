@@ -281,6 +281,7 @@ class TestVaultSandboxClientCreateInbox:
         mock_inbox_data.email_address = "test@example.com"
         mock_inbox_data.expires_at = "2025-01-01T00:00:00Z"
         mock_inbox_data.inbox_hash = "test-hash"
+        mock_inbox_data.encrypted = True
         mock_inbox_data.server_sig_pk = "test-server-pk"
         client._api_client.create_inbox = AsyncMock(return_value=mock_inbox_data)
 
@@ -305,6 +306,7 @@ class TestVaultSandboxClientCreateInbox:
         mock_inbox_data.email_address = "custom@example.com"
         mock_inbox_data.expires_at = "2025-01-01T00:00:00Z"
         mock_inbox_data.inbox_hash = "test-hash"
+        mock_inbox_data.encrypted = True
         mock_inbox_data.server_sig_pk = "test-server-pk"
         client._api_client.create_inbox = AsyncMock(return_value=mock_inbox_data)
 
@@ -315,6 +317,76 @@ class TestVaultSandboxClientCreateInbox:
         call_kwargs = client._api_client.create_inbox.call_args.kwargs
         assert call_kwargs["ttl"] == 3600
         assert call_kwargs["email_address"] == "custom@example.com"
+
+    @pytest.mark.asyncio
+    async def test_create_plain_inbox(self) -> None:
+        """Test create_inbox with encryption='plain' creates unencrypted inbox."""
+        from vaultsandbox.types import CreateInboxOptions
+
+        client = VaultSandboxClient(api_key="test-key")
+
+        mock_strategy = MagicMock()
+        client._strategy = mock_strategy
+        client._initialized = True
+        client._ensure_initialized = AsyncMock()
+
+        # Mock server info with encryption policy that allows plain
+        mock_server_info = MagicMock()
+        mock_server_info.encryption_policy = "enabled"
+        client._server_info = mock_server_info
+
+        mock_inbox_data = MagicMock()
+        mock_inbox_data.email_address = "plain@example.com"
+        mock_inbox_data.expires_at = "2025-01-01T00:00:00Z"
+        mock_inbox_data.inbox_hash = "test-hash"
+        mock_inbox_data.encrypted = False
+        mock_inbox_data.server_sig_pk = None
+        client._api_client.create_inbox = AsyncMock(return_value=mock_inbox_data)
+
+        options = CreateInboxOptions(encryption="plain")
+        inbox = await client.create_inbox(options)
+
+        # Should not generate keypair for plain inbox
+        client._api_client.create_inbox.assert_called_once()
+        call_args = client._api_client.create_inbox.call_args
+        assert call_args[0][0] is None  # client_kem_pk should be None
+        assert call_args.kwargs["encryption"] == "plain"
+        assert inbox.encrypted is False
+
+    @pytest.mark.asyncio
+    async def test_create_encrypted_inbox_explicit(self) -> None:
+        """Test create_inbox with encryption='encrypted' creates encrypted inbox."""
+        from vaultsandbox.types import CreateInboxOptions
+
+        client = VaultSandboxClient(api_key="test-key")
+
+        mock_strategy = MagicMock()
+        client._strategy = mock_strategy
+        client._initialized = True
+        client._ensure_initialized = AsyncMock()
+
+        # Mock server info with encryption policy that allows override
+        mock_server_info = MagicMock()
+        mock_server_info.encryption_policy = "disabled"
+        client._server_info = mock_server_info
+
+        mock_inbox_data = MagicMock()
+        mock_inbox_data.email_address = "encrypted@example.com"
+        mock_inbox_data.expires_at = "2025-01-01T00:00:00Z"
+        mock_inbox_data.inbox_hash = "test-hash"
+        mock_inbox_data.encrypted = True
+        mock_inbox_data.server_sig_pk = "test-server-pk"
+        client._api_client.create_inbox = AsyncMock(return_value=mock_inbox_data)
+
+        options = CreateInboxOptions(encryption="encrypted")
+        inbox = await client.create_inbox(options)
+
+        # Should generate keypair for encrypted inbox
+        client._api_client.create_inbox.assert_called_once()
+        call_args = client._api_client.create_inbox.call_args
+        assert call_args[0][0] is not None  # client_kem_pk should be set
+        assert call_args.kwargs["encryption"] == "encrypted"
+        assert inbox.encrypted is True
 
 
 class TestVaultSandboxClientDeleteAllInboxes:
@@ -354,9 +426,11 @@ class TestVaultSandboxClientExportToFile:
             email_address="test@example.com",
             inbox_hash="test-hash",
             expires_at="2025-01-01T00:00:00Z",
+            encrypted=True,
+            email_auth=False,
+            exported_at="2025-01-01T12:00:00Z",
             server_sig_pk="server-pk",
             secret_key=to_base64url(keypair.secret_key),
-            exported_at="2025-01-01T12:00:00Z",
         )
 
         client._inboxes["test@example.com"] = mock_inbox
@@ -399,9 +473,11 @@ class TestImportInboxSuccess:
             email_address="test@example.com",
             expires_at="2025-01-01T00:00:00Z",
             inbox_hash="test-hash",
+            encrypted=True,
+            email_auth=False,
+            exported_at="2025-01-01T00:00:00Z",
             server_sig_pk=server_sig_pk,
             secret_key=to_base64url(keypair.secret_key),
-            exported_at="2025-01-01T00:00:00Z",
         )
 
         inbox = await client.import_inbox(exported_data)
@@ -438,6 +514,8 @@ class TestImportInboxSuccess:
                     "emailAddress": "test@example.com",
                     "expiresAt": "2025-01-01T00:00:00Z",
                     "inboxHash": "test-hash",
+                    "encrypted": True,
+                    "emailAuth": False,
                     "serverSigPk": server_sig_pk,
                     "secretKey": to_base64url(keypair.secret_key),
                     "exportedAt": "2025-01-01T00:00:00Z",
@@ -480,9 +558,11 @@ class TestVaultSandboxClientExportImport:
                     email_address="",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk="pk",
                     secret_key="sk",
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -517,9 +597,11 @@ class TestVaultSandboxClientExportImport:
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk=server_sig_pk,
                     secret_key=to_base64url(keypair.secret_key),
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -715,9 +797,11 @@ class TestVaultSandboxClientRuntimeChecks:
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk="pk",
                     secret_key="sk",
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -736,9 +820,11 @@ class TestVaultSandboxClientRuntimeChecks:
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk="pk",
                     secret_key="sk",
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -769,9 +855,11 @@ class TestImportExportValidation:
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk=server_sig_pk,
                     secret_key="not!valid!base64!!!",
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -798,9 +886,11 @@ class TestImportExportValidation:
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk=server_sig_pk,
                     secret_key=to_base64url(b"short"),
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -832,9 +922,11 @@ class TestImportExportValidation:
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk=different_server_pk,
                     secret_key=to_base64url(keypair.secret_key),
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -862,9 +954,11 @@ class TestImportExportValidation:
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="",  # Empty
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk=server_sig_pk,
                     secret_key=to_base64url(keypair.secret_key),
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -887,9 +981,11 @@ class TestExportInbox:
             email_address="test@example.com",
             inbox_hash="test-hash",
             expires_at="2025-01-01T00:00:00Z",
+            encrypted=True,
+            email_auth=False,
+            exported_at="2025-01-01T00:00:00Z",
             server_sig_pk="server-pk",
             secret_key=to_base64url(keypair.secret_key),
-            exported_at="2025-01-01T00:00:00Z",
         )
 
         client._inboxes["test@example.com"] = mock_inbox
@@ -919,9 +1015,11 @@ class TestExportInbox:
             email_address="test@example.com",
             inbox_hash="test-hash",
             expires_at="2025-01-01T00:00:00Z",
+            encrypted=True,
+            email_auth=False,
+            exported_at="2025-01-01T00:00:00Z",
             server_sig_pk="server-pk",
             secret_key=to_base64url(keypair.secret_key),
-            exported_at="2025-01-01T00:00:00Z",
         )
 
         client._inboxes["test@example.com"] = mock_inbox
@@ -945,9 +1043,11 @@ class TestExportInbox:
             email_address="test@example.com",
             inbox_hash="test-hash",
             expires_at="2025-01-01T00:00:00Z",
+            encrypted=True,
+            email_auth=False,
+            exported_at="2025-01-01T12:00:00Z",
             server_sig_pk="server-pk",
             secret_key=to_base64url(keypair.secret_key),
-            exported_at="2025-01-01T12:00:00Z",
         )
 
         client._inboxes["test@example.com"] = mock_inbox
@@ -1012,9 +1112,11 @@ class TestImportValidationErrors:
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk="pk",
                     secret_key="sk",
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -1033,9 +1135,11 @@ class TestImportValidationErrors:
                     email_address="test@example.com",
                     expires_at="",  # Empty
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk="pk",
                     secret_key="sk",
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -1047,16 +1151,18 @@ class TestImportValidationErrors:
         client._server_info = MagicMock()
         client._initialized = True
 
-        with pytest.raises(InvalidImportDataError, match="Missing serverSigPk"):
+        with pytest.raises(InvalidImportDataError, match="Missing serverSigPk for encrypted inbox"):
             await client.import_inbox(
                 ExportedInbox(
                     version=1,
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk="",  # Empty
                     secret_key="sk",
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -1068,16 +1174,18 @@ class TestImportValidationErrors:
         client._server_info = MagicMock()
         client._initialized = True
 
-        with pytest.raises(InvalidImportDataError, match="Missing secretKey"):
+        with pytest.raises(InvalidImportDataError, match="Missing secretKey for encrypted inbox"):
             await client.import_inbox(
                 ExportedInbox(
                     version=1,
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk="pk",
                     secret_key="",  # Empty
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -1096,9 +1204,11 @@ class TestImportValidationErrors:
                     email_address="testexample.com",  # No @ symbol
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk="pk",
                     secret_key="sk",
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -1117,9 +1227,11 @@ class TestImportValidationErrors:
                     email_address="test@@example.com",  # Multiple @ symbols
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk="pk",
                     secret_key="sk",
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -1142,9 +1254,11 @@ class TestImportValidationErrors:
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk=to_base64url(b"tooshort"),  # Wrong length
                     secret_key=to_base64url(keypair.secret_key),
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -1167,9 +1281,11 @@ class TestImportValidationErrors:
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk="not!valid!base64!!!",  # Invalid encoding
                     secret_key=to_base64url(keypair.secret_key),
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -1195,9 +1311,11 @@ class TestImportValidationErrors:
                     email_address="test@example.com",
                     expires_at="not-a-valid-timestamp",  # Invalid format
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk=server_sig_pk,
                     secret_key=to_base64url(keypair.secret_key),
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 
@@ -1223,9 +1341,11 @@ class TestImportValidationErrors:
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="not-a-valid-timestamp",  # Invalid format
                     server_sig_pk=server_sig_pk,
                     secret_key=to_base64url(keypair.secret_key),
-                    exported_at="not-a-valid-timestamp",  # Invalid format
                 )
             )
 
@@ -1259,9 +1379,11 @@ class TestImportValidationErrors:
                     email_address="test@example.com",
                     expires_at="2025-01-01T00:00:00Z",
                     inbox_hash="hash",
+                    encrypted=True,
+                    email_auth=False,
+                    exported_at="2025-01-01T00:00:00Z",
                     server_sig_pk=server_sig_pk,
                     secret_key=fake_secret_key,
-                    exported_at="2025-01-01T00:00:00Z",
                 )
             )
 

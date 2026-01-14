@@ -70,11 +70,14 @@ from .types import (
     DMARCResult,
     DMARCStatus,
     EmailMetadata,
+    EncryptionPolicy,
     ExportedInbox,
     InboxData,
+    InboxEncryptionMode,
     PollingConfig,
     RawEmail,
     ReverseDNSResult,
+    ReverseDNSStatus,
     ServerInfo,
     SPFResult,
     SPFStatus,
@@ -84,7 +87,7 @@ from .types import (
     WaitForEmailOptions,
 )
 
-__version__ = "0.6.1"
+__version__ = "0.7.0"
 
 __all__ = [
     # Main classes
@@ -107,6 +110,8 @@ __all__ = [
     "ClientConfig",
     "CreateInboxOptions",
     "DeliveryStrategyType",
+    "EncryptionPolicy",
+    "InboxEncryptionMode",
     "PollingConfig",
     "SSEConfig",
     "WaitForCountOptions",
@@ -130,6 +135,7 @@ __all__ = [
     "DMARCStatus",
     "DMARCPolicy",
     "ReverseDNSResult",
+    "ReverseDNSStatus",
     # Errors (per Appendix C of VaultSandbox spec)
     "VaultSandboxError",
     "ApiError",

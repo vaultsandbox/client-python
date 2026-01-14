@@ -14,7 +14,9 @@ from ..errors import ApiError, EmailNotFoundError, InboxNotFoundError, NetworkEr
 from ..types import (
     ClientConfig,
     EmailResponse,
+    EncryptionPolicy,
     InboxData,
+    InboxEncryptionMode,
     RawEmailResponse,
     ServerInfo,
     SyncStatus,
@@ -187,6 +189,8 @@ class ApiClient:
         """
         response = await self._request("GET", "/api/server-info")
         data = response.json()
+        # Default to 'always' if not specified (backwards compatibility)
+        encryption_policy: EncryptionPolicy = data.get("encryptionPolicy", "always")
         return ServerInfo(
             server_sig_pk=data["serverSigPk"],
             algs=data["algs"],
@@ -195,32 +199,44 @@ class ApiClient:
             default_ttl=data["defaultTtl"],
             sse_console=data.get("sseConsole", False),
             allowed_domains=data.get("allowedDomains", []),
+            encryption_policy=encryption_policy,
         )
 
     # Inbox endpoints
 
     async def create_inbox(
         self,
-        client_kem_pk: str,
+        client_kem_pk: str | None = None,
         *,
         ttl: int | None = None,
         email_address: str | None = None,
+        email_auth: bool | None = None,
+        encryption: InboxEncryptionMode | None = None,
     ) -> InboxData:
         """Create a new inbox.
 
         Args:
             client_kem_pk: Base64url-encoded ML-KEM-768 public key.
+                Required for encrypted inboxes, omit for plain inboxes.
             ttl: Time-to-live in seconds.
             email_address: Desired email address or domain.
+            email_auth: Enable/disable email authentication checks. None uses server default.
+            encryption: Encryption mode ('encrypted' or 'plain'). None uses server default.
 
         Returns:
             InboxData with the created inbox information.
         """
-        body: dict[str, Any] = {"clientKemPk": client_kem_pk}
+        body: dict[str, Any] = {}
+        if client_kem_pk is not None:
+            body["clientKemPk"] = client_kem_pk
         if ttl is not None:
             body["ttl"] = ttl
         if email_address is not None:
             body["emailAddress"] = email_address
+        if email_auth is not None:
+            body["emailAuth"] = email_auth
+        if encryption is not None:
+            body["encryption"] = encryption
 
         response = await self._request("POST", "/api/inboxes", json=body)
         data = response.json()
@@ -228,7 +244,9 @@ class ApiClient:
             email_address=data["emailAddress"],
             expires_at=data["expiresAt"],
             inbox_hash=data["inboxHash"],
-            server_sig_pk=data["serverSigPk"],
+            encrypted=data.get("encrypted", True),  # Default to True for backwards compat
+            email_auth=data.get("emailAuth", False),
+            server_sig_pk=data.get("serverSigPk"),  # Optional, only present when encrypted
         )
 
     async def delete_inbox(self, email_address: str) -> None:

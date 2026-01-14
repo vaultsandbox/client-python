@@ -36,17 +36,21 @@ class Inbox:
     Attributes:
         email_address: The email address assigned to the inbox.
         expires_at: Timestamp when the inbox will expire.
-        inbox_hash: SHA-256 hash of the client KEM public key.
-        server_sig_pk: Server signing public key for verification.
+        inbox_hash: SHA-256 hash of the client KEM public key (or email for plain inboxes).
+        encrypted: Whether the inbox uses encryption.
+        server_sig_pk: Server signing public key for verification (only for encrypted inboxes).
+        email_auth: Whether email authentication checks are enabled.
     """
 
     email_address: str
     expires_at: datetime
     inbox_hash: str
-    server_sig_pk: str
-    _keypair: Keypair = field(repr=False)
     _api_client: ApiClient = field(repr=False)
     _strategy: DeliveryStrategy = field(repr=False)
+    encrypted: bool = True
+    server_sig_pk: str | None = None
+    email_auth: bool = True
+    _keypair: Keypair | None = field(default=None, repr=False)
     _subscriptions: list[Subscription] = field(default_factory=list, repr=False)
 
     async def list_emails(self) -> list[Email]:
@@ -69,16 +73,29 @@ class Inbox:
         Returns:
             List of EmailMetadata objects.
         """
+        import base64
+        import json
+
         list_responses = await self._api_client.list_emails(
             self.email_address, include_content=False
         )
         emails = []
         for email_data in list_responses:
-            metadata = decrypt_metadata(
-                email_data["encryptedMetadata"],
-                self._keypair,
-                pinned_server_key=self.server_sig_pk,
-            )
+            # Check if this is an encrypted or plain email
+            if "encryptedMetadata" in email_data:
+                # Encrypted email - decrypt metadata
+                if self._keypair is None:  # pragma: no cover
+                    raise RuntimeError("Encrypted email received but inbox has no keypair")
+                metadata = decrypt_metadata(
+                    email_data["encryptedMetadata"],
+                    self._keypair,
+                    pinned_server_key=self.server_sig_pk,
+                )
+            else:
+                # Plain email - decode base64 JSON
+                metadata_b64 = email_data.get("metadata", "")
+                metadata = json.loads(base64.b64decode(metadata_b64).decode("utf-8"))
+
             emails.append(
                 EmailMetadata(
                     id=email_data["id"],
@@ -111,16 +128,28 @@ class Inbox:
         Returns:
             RawEmail object with id and raw MIME content.
         """
+        import base64
+
         from .crypto import decrypt_raw
         from .types import RawEmail
 
         raw_response = await self._api_client.get_raw_email(self.email_address, email_id)
-        # Pass pinned server key for validation per Section 8.1 step 5
-        raw = decrypt_raw(
-            raw_response["encryptedRaw"],
-            self._keypair,
-            pinned_server_key=self.server_sig_pk,
-        )
+
+        # Check if this is an encrypted or plain email
+        if "encryptedRaw" in raw_response:
+            # Encrypted email - decrypt
+            if self._keypair is None:  # pragma: no cover
+                raise RuntimeError("Encrypted email received but inbox has no keypair")
+            # Pass pinned server key for validation per Section 8.1 step 5
+            raw = decrypt_raw(
+                raw_response["encryptedRaw"],
+                self._keypair,
+                pinned_server_key=self.server_sig_pk,
+            )
+        else:
+            # Plain email - decode base64
+            raw = base64.b64decode(raw_response.get("raw", "")).decode("utf-8")
+
         return RawEmail(id=raw_response["id"], raw=raw)
 
     async def mark_email_as_read(self, email_id: str) -> None:
@@ -300,7 +329,8 @@ class Inbox:
         """Export inbox data for persistence/sharing.
 
         Per VaultSandbox spec Section 9, exports include version, email address,
-        expiration, inbox hash, server public key, and secret key (base64url encoded).
+        expiration, inbox hash, and for encrypted inboxes: server public key and
+        secret key (base64url encoded).
 
         Note: Public key is NOT exported as it can be derived from secret key
         at offset 1152 (see Section 4.2).
@@ -310,12 +340,19 @@ class Inbox:
         Returns:
             ExportedInbox with keypair and metadata.
         """
+        # For encrypted inboxes, include cryptographic fields
+        secret_key: str | None = None
+        if self.encrypted and self._keypair is not None:
+            secret_key = to_base64url(self._keypair.secret_key)
+
         return ExportedInbox(
             version=EXPORT_VERSION,
             email_address=self.email_address,
             expires_at=self.expires_at.isoformat().replace("+00:00", "Z"),
             inbox_hash=self.inbox_hash,
-            server_sig_pk=self.server_sig_pk,
-            secret_key=to_base64url(self._keypair.secret_key),
+            encrypted=self.encrypted,
+            email_auth=self.email_auth,
             exported_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            server_sig_pk=self.server_sig_pk,
+            secret_key=secret_key,
         )

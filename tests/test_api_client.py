@@ -251,3 +251,34 @@ class TestNetworkErrorRetry:
 
         assert "Network error" in str(exc_info.value)
         assert "Request timed out" in str(exc_info.value)
+
+
+class TestCreateInbox:
+    """Tests for create_inbox method."""
+
+    @pytest.mark.asyncio
+    async def test_create_inbox_with_encryption_parameter(self, api_client: ApiClient) -> None:
+        """Test that encryption parameter is passed to API request body (line 239)."""
+        captured_kwargs: dict = {}
+
+        async def mock_request(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return httpx.Response(
+                200,
+                json={
+                    "emailAddress": "test@example.com",
+                    "expiresAt": "2025-01-01T00:00:00Z",
+                    "inboxHash": "test-hash",
+                    "encrypted": False,
+                },
+            )
+
+        mock_client = MagicMock()
+        mock_client.is_closed = False
+        mock_client.request = mock_request
+        api_client._client = mock_client
+
+        await api_client.create_inbox(encryption="plain")
+
+        assert "json" in captured_kwargs
+        assert captured_kwargs["json"]["encryption"] == "plain"

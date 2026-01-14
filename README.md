@@ -10,7 +10,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/vaultsandbox.svg)](https://pypi.org/project/vaultsandbox/)
 [![CI](https://github.com/vaultsandbox/client-python/actions/workflows/ci.yml/badge.svg)](https://github.com/vaultsandbox/client-python/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python](https://img.shields.io/badge/python-%3E%3D3.10-brightgreen.svg)](https://www.python.org/)
 
 **Production-like email testing. Self-hosted & secure.**
@@ -564,4 +564,4 @@ Contributions are welcome! Please read our [contributing guidelines](CONTRIBUTIN
 
 ## License
 
-MIT — see [LICENSE](LICENSE) for details.
+Apache 2.0 — see [LICENSE](LICENSE) for details.

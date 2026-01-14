@@ -37,6 +37,7 @@ class TestInboxExport:
         assert exported.email_address == "test@example.com"
         assert exported.expires_at == "2025-01-01T12:00:00Z"
         assert exported.inbox_hash == "test-hash"
+        assert exported.encrypted is True
         assert exported.server_sig_pk == "test-server-pk"
         assert exported.secret_key == to_base64url(keypair.secret_key)
         assert exported.exported_at is not None
@@ -169,6 +170,49 @@ class TestInboxListEmailsMetadataOnly:
             "test@example.com", include_content=False
         )
 
+    @pytest.mark.asyncio
+    async def test_list_emails_metadata_only_plain_inbox(self) -> None:
+        """Test list_emails_metadata_only with plain (unencrypted) inbox."""
+        import base64
+        import json
+
+        mock_api_client = MagicMock()
+        # Plain email response has 'metadata' field (base64 encoded) instead of 'encryptedMetadata'
+        metadata = {
+            "from": "sender@example.com",
+            "subject": "Plain Email",
+            "receivedAt": "2025-01-01T12:00:00Z",
+        }
+        mock_api_client.list_emails = AsyncMock(
+            return_value=[
+                {
+                    "id": "email-plain",
+                    "metadata": base64.b64encode(json.dumps(metadata).encode()).decode(),
+                    "isRead": False,
+                },
+            ]
+        )
+
+        # Plain inbox has no keypair
+        inbox = Inbox(
+            email_address="plain@example.com",
+            expires_at=datetime.now(timezone.utc),
+            inbox_hash="test-hash",
+            _api_client=mock_api_client,
+            _strategy=MagicMock(),
+            encrypted=False,
+            server_sig_pk=None,
+            _keypair=None,
+        )
+
+        result = await inbox.list_emails_metadata_only()
+
+        assert len(result) == 1
+        assert result[0].id == "email-plain"
+        assert result[0].from_address == "sender@example.com"
+        assert result[0].subject == "Plain Email"
+        assert result[0].is_read is False
+
 
 class TestInboxGetEmail:
     """Tests for Inbox.get_email() method."""
@@ -242,6 +286,38 @@ class TestInboxGetRawEmail:
                 keypair,
                 pinned_server_key="test-server-pk",
             )
+
+    @pytest.mark.asyncio
+    async def test_get_raw_email_plain_inbox(self) -> None:
+        """Test get_raw_email with plain (unencrypted) inbox."""
+        import base64
+
+        mock_api_client = MagicMock()
+        raw_content = "From: sender@example.com\r\nSubject: Plain\r\n\r\nBody"
+        mock_api_client.get_raw_email = AsyncMock(
+            return_value={
+                "id": "email-plain",
+                "raw": base64.b64encode(raw_content.encode()).decode(),
+            }
+        )
+
+        # Plain inbox has no keypair
+        inbox = Inbox(
+            email_address="plain@example.com",
+            expires_at=datetime.now(timezone.utc),
+            inbox_hash="test-hash",
+            _api_client=mock_api_client,
+            _strategy=MagicMock(),
+            encrypted=False,
+            server_sig_pk=None,
+            _keypair=None,
+        )
+
+        result = await inbox.get_raw_email("email-plain")
+
+        assert result.id == "email-plain"
+        assert result.raw == raw_content
+        mock_api_client.get_raw_email.assert_called_once_with("plain@example.com", "email-plain")
 
 
 class TestInboxUnsubscribe:

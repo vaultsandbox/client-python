@@ -8,6 +8,7 @@ from vaultsandbox.types import (
     DMARCResult,
     DMARCStatus,
     ReverseDNSResult,
+    ReverseDNSStatus,
     SPFResult,
     SPFStatus,
 )
@@ -29,7 +30,7 @@ class TestAuthResults:
             spf=SPFResult(result=SPFStatus.PASS, domain="example.com"),
             dkim=[DKIMResult(result=DKIMStatus.PASS, domain="example.com")],
             dmarc=DMARCResult(result=DMARCStatus.PASS, domain="example.com"),
-            reverse_dns=ReverseDNSResult(verified=True),
+            reverse_dns=ReverseDNSResult(result=ReverseDNSStatus.PASS),
         )
         validation = auth.validate()
         assert validation.passed is True
@@ -81,7 +82,7 @@ class TestAuthResults:
             spf=SPFResult(result=SPFStatus.PASS, domain="example.com"),
             dkim=[DKIMResult(result=DKIMStatus.PASS, domain="example.com")],
             dmarc=DMARCResult(result=DMARCStatus.PASS),
-            reverse_dns=ReverseDNSResult(verified=False, hostname="mail.example.com"),
+            reverse_dns=ReverseDNSResult(result=ReverseDNSStatus.FAIL, hostname="mail.example.com"),
         )
         validation = auth.validate()
         # passed only considers SPF, DKIM, DMARC (not reverse_dns per Node.js spec)
@@ -95,7 +96,7 @@ class TestAuthResults:
             spf=SPFResult(result=SPFStatus.NONE),
             dkim=[DKIMResult(result=DKIMStatus.NONE)],
             dmarc=DMARCResult(result=DMARCStatus.NONE),
-            reverse_dns=ReverseDNSResult(verified=False),
+            reverse_dns=ReverseDNSResult(result=ReverseDNSStatus.FAIL),
         )
         validation = auth.validate()
         assert validation.passed is False
@@ -223,22 +224,22 @@ class TestAuthResultsParsing:
     def test_parse_reverse_dns_result(self) -> None:
         """Test parsing reverse DNS result from wire format."""
         data = {
-            "verified": True,
+            "result": "pass",
             "ip": "192.168.1.1",
             "hostname": "mail.example.com",
         }
         rdns = parse_reverse_dns_result(data)
         assert rdns is not None
-        assert rdns.verified is True
+        assert rdns.result == ReverseDNSStatus.PASS
         assert rdns.ip == "192.168.1.1"
         assert rdns.hostname == "mail.example.com"
 
-    def test_parse_reverse_dns_result_not_verified(self) -> None:
-        """Test parsing reverse DNS result when not verified."""
-        data = {"verified": False, "ip": "192.168.1.1"}
+    def test_parse_reverse_dns_result_fail(self) -> None:
+        """Test parsing reverse DNS result when failed."""
+        data = {"result": "fail", "ip": "192.168.1.1"}
         rdns = parse_reverse_dns_result(data)
         assert rdns is not None
-        assert rdns.verified is False
+        assert rdns.result == ReverseDNSStatus.FAIL
         assert rdns.hostname is None
 
     def test_parse_reverse_dns_result_none(self) -> None:
@@ -270,7 +271,7 @@ class TestAuthResultsParsing:
                 "aligned": True,
             },
             "reverseDns": {
-                "verified": True,
+                "result": "pass",
                 "ip": "127.0.0.1",
                 "hostname": "test.vaultsandbox.local",
             },
@@ -294,7 +295,7 @@ class TestAuthResultsParsing:
 
         # Verify Reverse DNS
         assert auth.reverse_dns is not None
-        assert auth.reverse_dns.verified is True
+        assert auth.reverse_dns.result == ReverseDNSStatus.PASS
         assert auth.reverse_dns.hostname == "test.vaultsandbox.local"
 
         # Verify validation passes
@@ -311,7 +312,7 @@ class TestAuthResultsParsing:
             "spf": {"result": "fail", "domain": "example.com"},
             "dkim": [{"result": "fail", "domain": "example.com"}],
             "dmarc": {"result": "fail", "policy": "reject"},
-            "reverseDns": {"verified": False, "ip": "127.0.0.1"},
+            "reverseDns": {"result": "fail", "ip": "127.0.0.1"},
         }
         auth = parse_auth_results(data)
         validation = auth.validate()

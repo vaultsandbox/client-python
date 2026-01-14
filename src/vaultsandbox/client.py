@@ -288,6 +288,30 @@ class VaultSandboxClient:
             raise RuntimeError("Client not initialized. Call create_inbox first.")
         return self._server_info
 
+    def _should_encrypt_inbox(self, encryption_option: str | None) -> bool:
+        """Determine if a new inbox should be encrypted based on policy and options.
+
+        Args:
+            encryption_option: User's requested encryption mode ('encrypted', 'plain', or None).
+
+        Returns:
+            True if the inbox should be encrypted.
+        """
+        if self._server_info is None:
+            return True  # Default to encrypted if server info not available
+
+        policy = self._server_info.encryption_policy
+
+        # If user specified an explicit option, use it (server will validate)
+        if encryption_option == "plain":
+            return False
+        if encryption_option == "encrypted":
+            return True
+
+        # Use server default based on policy
+        # Default encrypted: policy is 'always' or 'enabled'
+        return policy in ("always", "enabled")
+
     async def create_inbox(
         self,
         options: CreateInboxOptions | None = None,
@@ -295,7 +319,7 @@ class VaultSandboxClient:
         """Create a new temporary email inbox.
 
         Args:
-            options: Options for inbox creation (TTL, email address).
+            options: Options for inbox creation (TTL, email address, encryption mode).
 
         Returns:
             A new Inbox instance.
@@ -306,14 +330,23 @@ class VaultSandboxClient:
 
         options = options or CreateInboxOptions()
 
-        # Generate keypair
-        keypair = generate_keypair()
+        # Determine if encryption should be used
+        should_encrypt = self._should_encrypt_inbox(options.encryption)
+
+        # Generate keypair only if encryption is needed
+        keypair: Keypair | None = None
+        client_kem_pk: str | None = None
+        if should_encrypt:
+            keypair = generate_keypair()
+            client_kem_pk = keypair.public_key_b64
 
         # Create inbox on server
         inbox_data = await self._api_client.create_inbox(
-            keypair.public_key_b64,
+            client_kem_pk,
             ttl=options.ttl,
             email_address=options.email_address,
+            email_auth=options.email_auth,
+            encryption=options.encryption,
         )
 
         # Parse expires_at timestamp
@@ -323,7 +356,9 @@ class VaultSandboxClient:
             email_address=inbox_data.email_address,
             expires_at=expires_at,
             inbox_hash=inbox_data.inbox_hash,
+            encrypted=inbox_data.encrypted,
             server_sig_pk=inbox_data.server_sig_pk,
+            email_auth=inbox_data.email_auth,
             _keypair=keypair,
             _api_client=self._api_client,
             _strategy=self._strategy,
@@ -414,15 +449,20 @@ class VaultSandboxClient:
         """
         exported = self.export_inbox(inbox_or_email)
         # Per Section 9.2, use camelCase field names in JSON
-        data = {
+        data: dict[str, Any] = {
             "version": exported.version,
             "emailAddress": exported.email_address,
             "expiresAt": exported.expires_at,
             "inboxHash": exported.inbox_hash,
-            "serverSigPk": exported.server_sig_pk,
-            "secretKey": exported.secret_key,
+            "encrypted": exported.encrypted,
+            "emailAuth": exported.email_auth,
             "exportedAt": exported.exported_at,
         }
+
+        # Only include cryptographic fields for encrypted inboxes
+        if exported.encrypted:
+            data["serverSigPk"] = exported.server_sig_pk
+            data["secretKey"] = exported.secret_key
 
         path = Path(file_path)
         path.write_text(json.dumps(data, indent=2))
@@ -455,20 +495,23 @@ class VaultSandboxClient:
         if data.email_address in self._inboxes:
             raise InboxAlreadyExistsError(f"Inbox {data.email_address} already exists")
 
-        # Reconstruct keypair per Section 10.2
-        # Secret key is base64url encoded per spec
-        secret_key = from_base64url(data.secret_key)
-        # Derive public key from secret key at offset 1152 (Section 4.2)
-        public_key = derive_public_key_from_secret(secret_key)
-        keypair = Keypair(
-            public_key=public_key,
-            secret_key=secret_key,
-            public_key_b64=to_base64url(public_key),
-        )
+        keypair: Keypair | None = None
 
-        # Validate keypair
-        if not validate_keypair(keypair):
-            raise InvalidImportDataError("Invalid keypair in import data")
+        # Reconstruct keypair only for encrypted inboxes
+        if data.encrypted and data.secret_key:
+            # Secret key is base64url encoded per spec
+            secret_key = from_base64url(data.secret_key)
+            # Derive public key from secret key at offset 1152 (Section 4.2)
+            public_key = derive_public_key_from_secret(secret_key)
+            keypair = Keypair(
+                public_key=public_key,
+                secret_key=secret_key,
+                public_key_b64=to_base64url(public_key),
+            )
+
+            # Validate keypair
+            if not validate_keypair(keypair):
+                raise InvalidImportDataError("Invalid keypair in import data")
 
         # Parse expires_at timestamp
         expires_at = parse_iso_timestamp(data.expires_at)
@@ -478,7 +521,9 @@ class VaultSandboxClient:
             email_address=data.email_address,
             expires_at=expires_at,
             inbox_hash=data.inbox_hash,
+            encrypted=data.encrypted,
             server_sig_pk=data.server_sig_pk,
+            email_auth=data.email_auth,
             _keypair=keypair,
             _api_client=self._api_client,
             _strategy=self._strategy,
@@ -514,9 +559,11 @@ class VaultSandboxClient:
                 email_address=data["emailAddress"],
                 expires_at=data["expiresAt"],
                 inbox_hash=data["inboxHash"],
-                server_sig_pk=data["serverSigPk"],
-                secret_key=data["secretKey"],
+                encrypted=data.get("encrypted", True),  # Default to True for backwards compat
+                email_auth=data.get("emailAuth", True),  # Default to True for backwards compat
                 exported_at=data.get("exportedAt", ""),
+                server_sig_pk=data.get("serverSigPk"),  # Optional for plain inboxes
+                secret_key=data.get("secretKey"),  # Optional for plain inboxes
             )
         except KeyError as e:
             raise InvalidImportDataError(f"Missing required field in import file: {e}") from e
@@ -531,8 +578,8 @@ class VaultSandboxClient:
         2. Validate required fields present and non-null
         3. Validate emailAddress contains exactly one @
         4. Validate inboxHash is non-empty
-        5. Validate and decode secretKey (2400 bytes)
-        6. Validate and decode serverSigPk (1952 bytes)
+        5. For encrypted inboxes: Validate and decode secretKey (2400 bytes)
+        6. For encrypted inboxes: Validate and decode serverSigPk (1952 bytes)
         7. Validate timestamps
 
         Args:
@@ -549,17 +596,13 @@ class VaultSandboxClient:
                 f"Unsupported export version: {data.version}, expected {EXPORT_VERSION}"
             )
 
-        # Step 2: Check required fields
+        # Step 2: Check required fields (common for both encrypted and plain)
         if not data.email_address:
             raise InvalidImportDataError("Missing emailAddress")
         if not data.expires_at:
             raise InvalidImportDataError("Missing expiresAt")
         if not data.inbox_hash:
             raise InvalidImportDataError("Missing inboxHash")
-        if not data.server_sig_pk:
-            raise InvalidImportDataError("Missing serverSigPk")
-        if not data.secret_key:
-            raise InvalidImportDataError("Missing secretKey")
 
         # Step 3: Validate emailAddress contains exactly one @
         at_count = data.email_address.count("@")
@@ -570,31 +613,44 @@ class VaultSandboxClient:
 
         # Step 4: Validate inboxHash is non-empty (already checked above)
 
-        # Step 5: Validate and decode secretKey
-        try:
-            secret_key = from_base64url(data.secret_key)
-            if len(secret_key) != MLKEM768_SECRET_KEY_SIZE:
-                raise InvalidImportDataError(
-                    f"Invalid secretKey length: {len(secret_key)} bytes, "
-                    f"expected {MLKEM768_SECRET_KEY_SIZE}"
-                )
-        except InvalidImportDataError:
-            raise
-        except Exception as e:
-            raise InvalidImportDataError(f"Invalid secretKey encoding: {e}") from e
+        # For encrypted inboxes, validate cryptographic fields
+        if data.encrypted:
+            if not data.server_sig_pk:
+                raise InvalidImportDataError("Missing serverSigPk for encrypted inbox")
+            if not data.secret_key:
+                raise InvalidImportDataError("Missing secretKey for encrypted inbox")
 
-        # Step 6: Validate and decode serverSigPk
-        try:
-            server_sig_pk = from_base64url(data.server_sig_pk)
-            if len(server_sig_pk) != MLDSA65_PUBLIC_KEY_SIZE:
+            # Step 5: Validate and decode secretKey
+            try:
+                secret_key = from_base64url(data.secret_key)
+                if len(secret_key) != MLKEM768_SECRET_KEY_SIZE:
+                    raise InvalidImportDataError(
+                        f"Invalid secretKey length: {len(secret_key)} bytes, "
+                        f"expected {MLKEM768_SECRET_KEY_SIZE}"
+                    )
+            except InvalidImportDataError:
+                raise
+            except Exception as e:
+                raise InvalidImportDataError(f"Invalid secretKey encoding: {e}") from e
+
+            # Step 6: Validate and decode serverSigPk
+            try:
+                server_sig_pk = from_base64url(data.server_sig_pk)
+                if len(server_sig_pk) != MLDSA65_PUBLIC_KEY_SIZE:
+                    raise InvalidImportDataError(
+                        f"Invalid serverSigPk length: {len(server_sig_pk)} bytes, "
+                        f"expected {MLDSA65_PUBLIC_KEY_SIZE}"
+                    )
+            except InvalidImportDataError:
+                raise
+            except Exception as e:
+                raise InvalidImportDataError(f"Invalid serverSigPk encoding: {e}") from e
+
+            # Verify server public key matches current server (if connected)
+            if self._server_info and data.server_sig_pk != self._server_info.server_sig_pk:
                 raise InvalidImportDataError(
-                    f"Invalid serverSigPk length: {len(server_sig_pk)} bytes, "
-                    f"expected {MLDSA65_PUBLIC_KEY_SIZE}"
+                    "Server signing public key does not match current server"
                 )
-        except InvalidImportDataError:
-            raise
-        except Exception as e:
-            raise InvalidImportDataError(f"Invalid serverSigPk encoding: {e}") from e
 
         # Step 7: Validate timestamps
         try:
@@ -607,7 +663,3 @@ class VaultSandboxClient:
                 parse_iso_timestamp(data.exported_at)
             except ValueError as e:
                 raise InvalidImportDataError(f"Invalid exportedAt format: {e}") from e
-
-        # Verify server public key matches current server (if connected)
-        if self._server_info and data.server_sig_pk != self._server_info.server_sig_pk:
-            raise InvalidImportDataError("Server signing public key does not match current server")

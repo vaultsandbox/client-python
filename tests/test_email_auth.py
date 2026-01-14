@@ -20,6 +20,7 @@ from vaultsandbox.types import (
     DKIMStatus,
     DMARCPolicy,
     DMARCStatus,
+    ReverseDNSStatus,
     SPFStatus,
 )
 
@@ -140,7 +141,7 @@ class TestAllAuthPassing:
                     "spf": "pass",
                     "dkim": "pass",
                     "dmarc": "pass",
-                    "reverseDns": True,
+                    "reverseDns": "pass",
                 },
             )
 
@@ -528,13 +529,13 @@ class TestReverseDNS:
                 api_config["api_key"],
                 inbox.email_address,
                 subject="Reverse DNS Verified",
-                auth={"reverseDns": True},
+                auth={"reverseDns": "pass"},
             )
 
             email = await inbox.wait_for_email(WaitForEmailOptions(timeout=30000))
 
             assert email.auth_results.reverse_dns is not None
-            assert email.auth_results.reverse_dns.verified is True
+            assert email.auth_results.reverse_dns.result == ReverseDNSStatus.PASS
             assert email.auth_results.validate().reverse_dns_passed is True
 
     @pytest.mark.asyncio
@@ -548,13 +549,13 @@ class TestReverseDNS:
                 api_config["api_key"],
                 inbox.email_address,
                 subject="Reverse DNS Not Verified",
-                auth={"reverseDns": False},
+                auth={"reverseDns": "fail"},
             )
 
             email = await inbox.wait_for_email(WaitForEmailOptions(timeout=30000))
 
             assert email.auth_results.reverse_dns is not None
-            assert email.auth_results.reverse_dns.verified is False
+            assert email.auth_results.reverse_dns.result == ReverseDNSStatus.FAIL
             validation = email.auth_results.validate()
             assert validation.reverse_dns_passed is False
             assert any("Reverse DNS" in f for f in validation.failures)
@@ -570,7 +571,7 @@ class TestReverseDNS:
                 api_config["api_key"],
                 inbox.email_address,
                 subject="Reverse DNS Details",
-                auth={"reverseDns": True},
+                auth={"reverseDns": "pass"},
             )
 
             email = await inbox.wait_for_email(WaitForEmailOptions(timeout=30000))
@@ -598,7 +599,7 @@ class TestAllAuthFailing:
                     "spf": "fail",
                     "dkim": "fail",
                     "dmarc": "fail",
-                    "reverseDns": False,
+                    "reverseDns": "fail",
                 },
             )
 
@@ -631,7 +632,7 @@ class TestMixedAuthResults:
                     "spf": "softfail",
                     "dkim": "pass",
                     "dmarc": "fail",
-                    "reverseDns": True,
+                    "reverseDns": "pass",
                 },
             )
 
@@ -659,7 +660,7 @@ class TestMixedAuthResults:
                     "spf": "pass",
                     "dkim": "fail",
                     "dmarc": "pass",
-                    "reverseDns": True,
+                    "reverseDns": "pass",
                 },
             )
 
@@ -687,7 +688,7 @@ class TestMixedAuthResults:
                     "spf": "pass",
                     "dkim": "pass",
                     "dmarc": "pass",
-                    "reverseDns": False,
+                    "reverseDns": "fail",
                 },
             )
 
@@ -716,7 +717,7 @@ class TestMixedAuthResults:
                     "spf": "neutral",
                     "dkim": "pass",
                     "dmarc": "pass",
-                    "reverseDns": True,
+                    "reverseDns": "pass",
                 },
             )
 
@@ -857,7 +858,7 @@ class TestPartialAuthOverrides:
             assert len(email.auth_results.dkim) > 0
             assert email.auth_results.dkim[0].result == DKIMStatus.PASS
             assert email.auth_results.dmarc.result == DMARCStatus.PASS
-            assert email.auth_results.reverse_dns.verified is True
+            assert email.auth_results.reverse_dns.result == ReverseDNSStatus.PASS
 
     @pytest.mark.asyncio
     async def test_only_dkim_override(self, api_config: dict[str, str]) -> None:
@@ -882,7 +883,7 @@ class TestPartialAuthOverrides:
             # Others should be pass (default)
             assert email.auth_results.spf.result == SPFStatus.PASS
             assert email.auth_results.dmarc.result == DMARCStatus.PASS
-            assert email.auth_results.reverse_dns.verified is True
+            assert email.auth_results.reverse_dns.result == ReverseDNSStatus.PASS
 
     @pytest.mark.asyncio
     async def test_only_reverse_dns_override(self, api_config: dict[str, str]) -> None:
@@ -895,13 +896,13 @@ class TestPartialAuthOverrides:
                 api_config["api_key"],
                 inbox.email_address,
                 subject="Only ReverseDNS Override",
-                auth={"reverseDns": False},  # Only override reverseDns
+                auth={"reverseDns": "fail"},  # Only override reverseDns
             )
 
             email = await inbox.wait_for_email(WaitForEmailOptions(timeout=30000))
 
             # ReverseDNS should be false (overridden)
-            assert email.auth_results.reverse_dns.verified is False
+            assert email.auth_results.reverse_dns.result == ReverseDNSStatus.FAIL
 
             # Others should be pass (default)
             assert email.auth_results.spf.result == SPFStatus.PASS

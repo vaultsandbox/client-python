@@ -178,6 +178,14 @@ class TestInboxLifecycle:
             # Inbox should be created successfully with custom TTL
 
     @pytest.mark.asyncio
+    async def test_create_inbox_with_email_auth_disabled(self, api_config: dict[str, str]) -> None:
+        """Test creating an inbox with email authentication disabled."""
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox(CreateInboxOptions(email_auth=False))
+            assert inbox.email_address is not None
+            # Inbox should be created successfully with email auth disabled
+
+    @pytest.mark.asyncio
     async def test_delete_inbox(self, api_config: dict[str, str]) -> None:
         """Test deleting an inbox."""
         async with VaultSandboxClient(**api_config) as client:
@@ -689,15 +697,23 @@ class TestAuthenticationResults:
 
             validation = email.auth_results.validate()
 
-            # Verify individual pass flags are consistent with explicit 'pass' result
+            # Verify individual pass flags are consistent with 'pass' or 'skipped' result
+            # (skipped is treated as passing since auth checks were disabled)
             expected_spf_passed = (
                 email.auth_results.spf is not None
-                and email.auth_results.spf.result == SPFStatus.PASS
+                and email.auth_results.spf.result in (SPFStatus.PASS, SPFStatus.SKIPPED)
             )
-            expected_dkim_passed = any(d.result == DKIMStatus.PASS for d in email.auth_results.dkim)
+            expected_dkim_passed = (
+                (
+                    any(d.result == DKIMStatus.PASS for d in email.auth_results.dkim)
+                    or all(d.result == DKIMStatus.SKIPPED for d in email.auth_results.dkim)
+                )
+                if email.auth_results.dkim
+                else False
+            )
             expected_dmarc_passed = (
                 email.auth_results.dmarc is not None
-                and email.auth_results.dmarc.result == DMARCStatus.PASS
+                and email.auth_results.dmarc.result in (DMARCStatus.PASS, DMARCStatus.SKIPPED)
             )
 
             assert validation.spf_passed == expected_spf_passed
@@ -822,6 +838,8 @@ class TestRawEmail:
         """Test retrieving raw email MIME source."""
         unique_id = str(uuid.uuid4())[:8]
         subject = f"Raw Email Test {unique_id}"
+        body_text = "Test body for raw email"
+        from_address = "test@example.com"
 
         async with VaultSandboxClient(**api_config) as client:
             inbox = await client.create_inbox()
@@ -831,7 +849,8 @@ class TestRawEmail:
                 smtp_port=int(smtp_config["port"]),
                 to_address=inbox.email_address,
                 subject=subject,
-                body_text="Test body for raw email",
+                body_text=body_text,
+                from_address=from_address,
             )
 
             email = await inbox.wait_for_email(WaitForEmailOptions(timeout=30000))
@@ -841,9 +860,58 @@ class TestRawEmail:
             assert raw_email is not None
             assert raw_email.id == email.id
             assert len(raw_email.raw) > 0
-            # Raw email should contain MIME headers
-            assert "Subject:" in raw_email.raw or "subject:" in raw_email.raw.lower()
-            assert unique_id in raw_email.raw
+            # Raw email should contain MIME headers and content
+            # These checks ensure the content is properly decoded (not double base64 encoded)
+            assert "Subject:" in raw_email.raw, "Missing Subject header"
+            assert unique_id in raw_email.raw, "Missing unique ID in subject"
+            assert "From:" in raw_email.raw, "Missing From header"
+            assert from_address in raw_email.raw, f"Missing sender {from_address}"
+            assert "To:" in raw_email.raw, "Missing To header"
+            assert inbox.email_address in raw_email.raw, "Missing recipient address"
+            assert body_text in raw_email.raw, "Missing body text"
+
+    @pytest.mark.asyncio
+    async def test_get_raw_email_plain_inbox(
+        self,
+        api_config: dict[str, str],
+        smtp_config: dict[str, str | int],
+    ) -> None:
+        """Test retrieving raw email MIME source from plain (unencrypted) inbox."""
+        unique_id = str(uuid.uuid4())[:8]
+        subject = f"Plain Raw Email Test {unique_id}"
+        body_text = "Test body for plain inbox raw email"
+        from_address = "test@example.com"
+
+        async with VaultSandboxClient(**api_config) as client:
+            # Create plain (unencrypted) inbox
+            inbox = await client.create_inbox(CreateInboxOptions(encryption="plain"))
+            assert inbox.encrypted is False, "Inbox should be plain (unencrypted)"
+
+            send_email(
+                smtp_host=str(smtp_config["host"]),
+                smtp_port=int(smtp_config["port"]),
+                to_address=inbox.email_address,
+                subject=subject,
+                body_text=body_text,
+                from_address=from_address,
+            )
+
+            email = await inbox.wait_for_email(WaitForEmailOptions(timeout=30000))
+
+            raw_email = await email.get_raw()
+
+            assert raw_email is not None
+            assert raw_email.id == email.id
+            assert len(raw_email.raw) > 0
+            # Raw email should contain MIME headers and content
+            # These checks ensure the content is properly decoded (not double base64 encoded)
+            assert "Subject:" in raw_email.raw, "Missing Subject header"
+            assert unique_id in raw_email.raw, "Missing unique ID in subject"
+            assert "From:" in raw_email.raw, "Missing From header"
+            assert from_address in raw_email.raw, f"Missing sender {from_address}"
+            assert "To:" in raw_email.raw, "Missing To header"
+            assert inbox.email_address in raw_email.raw, "Missing recipient address"
+            assert body_text in raw_email.raw, "Missing body text"
 
 
 class TestExportImport:
