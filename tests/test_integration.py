@@ -1293,3 +1293,525 @@ class TestEdgeCases:
             inbox = await client.create_inbox()
             with pytest.raises(EmailNotFoundError):
                 await inbox.get_email("nonexistent-email-id")
+
+
+class TestWebhooks:
+    """Tests for inbox webhook functionality."""
+
+    @pytest.mark.asyncio
+    async def test_create_webhook(self, api_config: dict[str, str]) -> None:
+        """Test creating a webhook for an inbox."""
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+                description="Test webhook",
+            )
+
+            assert webhook.id is not None
+            assert webhook.id.startswith("whk_")
+            assert webhook.url == "https://example.com/webhook"
+            assert webhook.events == ["email.received"]
+            assert webhook.scope == "inbox"
+            assert webhook.enabled is True
+            assert webhook.secret is not None
+            assert webhook.secret.startswith("whsec_")
+            assert webhook.description == "Test webhook"
+
+    @pytest.mark.asyncio
+    async def test_create_webhook_with_multiple_events(self, api_config: dict[str, str]) -> None:
+        """Test creating a webhook with multiple event types."""
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received", "email.deleted"],
+            )
+
+            assert set(webhook.events) == {"email.received", "email.deleted"}
+
+    @pytest.mark.asyncio
+    async def test_create_webhook_with_template(self, api_config: dict[str, str]) -> None:
+        """Test creating a webhook with a built-in template."""
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+                template="slack",
+            )
+
+            assert webhook.template == "slack"
+
+    @pytest.mark.asyncio
+    async def test_create_webhook_with_custom_template(self, api_config: dict[str, str]) -> None:
+        """Test creating a webhook with a custom template."""
+        from vaultsandbox import CustomTemplate
+
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            custom_template = CustomTemplate(
+                body='{"email": "{{data.from.address}}", "subject": "{{data.subject}}"}',
+                content_type="application/json",
+            )
+
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+                template=custom_template,
+            )
+
+            assert webhook.template is not None
+            assert isinstance(webhook.template, CustomTemplate)
+            assert "{{data.from.address}}" in webhook.template.body
+
+    @pytest.mark.asyncio
+    async def test_create_webhook_with_filter(self, api_config: dict[str, str]) -> None:
+        """Test creating a webhook with filter rules."""
+        from vaultsandbox import FilterConfig, FilterRule
+
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            filter_config = FilterConfig(
+                rules=[
+                    FilterRule(
+                        field="from.address",
+                        operator="domain",
+                        value="example.com",
+                    ),
+                    FilterRule(
+                        field="subject",
+                        operator="contains",
+                        value="important",
+                        case_sensitive=False,
+                    ),
+                ],
+                mode="all",
+                require_auth=False,
+            )
+
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+                filter=filter_config,
+            )
+
+            assert webhook.filter is not None
+            assert webhook.filter.mode == "all"
+            assert len(webhook.filter.rules) == 2
+
+    @pytest.mark.asyncio
+    async def test_list_webhooks(self, api_config: dict[str, str]) -> None:
+        """Test listing webhooks for an inbox."""
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            # Create multiple webhooks
+            await inbox.create_webhook(
+                url="https://example.com/webhook1",
+                events=["email.received"],
+            )
+            await inbox.create_webhook(
+                url="https://example.com/webhook2",
+                events=["email.deleted"],
+            )
+
+            webhooks = await inbox.list_webhooks()
+
+            assert len(webhooks) >= 2
+            urls = [w.url for w in webhooks]
+            assert "https://example.com/webhook1" in urls
+            assert "https://example.com/webhook2" in urls
+            # List should not include secrets
+            for webhook in webhooks:
+                assert webhook.secret is None
+
+    @pytest.mark.asyncio
+    async def test_get_webhook(self, api_config: dict[str, str]) -> None:
+        """Test getting a specific webhook by ID."""
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            created = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+                description="Test webhook",
+            )
+
+            webhook = await inbox.get_webhook(created.id)
+
+            assert webhook.id == created.id
+            assert webhook.url == created.url
+            assert webhook.secret is not None  # Get includes secret
+            assert webhook.stats is not None  # Get includes stats
+
+    @pytest.mark.asyncio
+    async def test_update_webhook_url(self, api_config: dict[str, str]) -> None:
+        """Test updating a webhook's URL."""
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+            )
+
+            await webhook.update(url="https://example.com/new-webhook")
+
+            assert webhook.url == "https://example.com/new-webhook"
+
+    @pytest.mark.asyncio
+    async def test_update_webhook_events(self, api_config: dict[str, str]) -> None:
+        """Test updating a webhook's events."""
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+            )
+
+            await webhook.update(events=["email.received", "email.deleted"])
+
+            assert set(webhook.events) == {"email.received", "email.deleted"}
+
+    @pytest.mark.asyncio
+    async def test_disable_enable_webhook(self, api_config: dict[str, str]) -> None:
+        """Test disabling and enabling a webhook."""
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+            )
+
+            assert webhook.enabled is True
+
+            await webhook.disable()
+            assert webhook.enabled is False
+
+            await webhook.enable()
+            assert webhook.enabled is True
+
+    @pytest.mark.asyncio
+    async def test_update_webhook_template(self, api_config: dict[str, str]) -> None:
+        """Test updating a webhook's template."""
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+            )
+
+            await webhook.update(template="discord")
+            assert webhook.template == "discord"
+
+            # Remove template
+            await webhook.update(remove_template=True)
+            assert webhook.template is None
+
+    @pytest.mark.asyncio
+    async def test_update_webhook_filter(self, api_config: dict[str, str]) -> None:
+        """Test updating a webhook's filter."""
+        from vaultsandbox import FilterConfig, FilterRule
+
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+            )
+
+            filter_config = FilterConfig(
+                rules=[
+                    FilterRule(field="subject", operator="contains", value="test"),
+                ],
+                mode="any",
+            )
+            await webhook.update(filter=filter_config)
+            assert webhook.filter is not None
+            assert webhook.filter.mode == "any"
+
+            # Remove filter
+            await webhook.update(remove_filter=True)
+            assert webhook.filter is None
+
+    @pytest.mark.asyncio
+    async def test_test_webhook(self, api_config: dict[str, str]) -> None:
+        """Test sending a test event to a webhook."""
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+            )
+
+            result = await webhook.test()
+
+            # The test will likely fail since example.com won't accept it,
+            # but we should get a result back
+            assert result is not None
+            assert isinstance(result.success, bool)
+            # If it failed, we should have an error or status code
+            if not result.success:
+                assert result.error is not None or result.status_code is not None
+
+    @pytest.mark.asyncio
+    async def test_rotate_webhook_secret(self, api_config: dict[str, str]) -> None:
+        """Test rotating a webhook's signing secret."""
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+            )
+
+            original_secret = webhook.secret
+
+            result = await webhook.rotate_secret()
+
+            assert result.id == webhook.id
+            assert result.secret is not None
+            assert result.secret.startswith("whsec_")
+            assert result.secret != original_secret
+            assert result.previous_secret_valid_until is not None
+            # Webhook should be updated with new secret
+            assert webhook.secret == result.secret
+
+    @pytest.mark.asyncio
+    async def test_delete_webhook(self, api_config: dict[str, str]) -> None:
+        """Test deleting a webhook."""
+        from vaultsandbox.errors import WebhookNotFoundError
+
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+            )
+
+            webhook_id = webhook.id
+            await webhook.delete()
+
+            # Trying to get the deleted webhook should raise an error
+            with pytest.raises(WebhookNotFoundError):
+                await inbox.get_webhook(webhook_id)
+
+    @pytest.mark.asyncio
+    async def test_delete_webhook_via_inbox(self, api_config: dict[str, str]) -> None:
+        """Test deleting a webhook via inbox method."""
+        from vaultsandbox.errors import WebhookNotFoundError
+
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+            )
+
+            await inbox.delete_webhook(webhook.id)
+
+            with pytest.raises(WebhookNotFoundError):
+                await inbox.get_webhook(webhook.id)
+
+    @pytest.mark.asyncio
+    async def test_webhook_not_found_error(self, api_config: dict[str, str]) -> None:
+        """Test that accessing a non-existent webhook raises WebhookNotFoundError."""
+        from vaultsandbox.errors import WebhookNotFoundError
+
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            with pytest.raises(WebhookNotFoundError):
+                await inbox.get_webhook("whk_nonexistent")
+
+    @pytest.mark.asyncio
+    async def test_webhook_refresh(self, api_config: dict[str, str]) -> None:
+        """Test refreshing webhook data from the server."""
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+            )
+
+            # Update via a different reference
+            webhook2 = await inbox.get_webhook(webhook.id)
+            await webhook2.update(description="Updated description")
+
+            # Original webhook shouldn't have the update yet
+            # Refresh to get latest
+            await webhook.refresh()
+
+            assert webhook.description == "Updated description"
+
+
+class TestWebhookSignatureVerification:
+    """Tests for webhook signature verification utilities."""
+
+    def test_verify_valid_signature(self) -> None:
+        """Test verifying a valid webhook signature."""
+        import hashlib
+        import hmac
+        import time
+
+        from vaultsandbox import verify_webhook_signature
+
+        secret = "whsec_test_secret"
+        timestamp = str(int(time.time()))
+        raw_body = '{"type": "email.received", "data": {}}'
+
+        # Compute the correct signature
+        signed_payload = f"{timestamp}.{raw_body}"
+        expected_sig = hmac.new(
+            secret.encode(), signed_payload.encode(), hashlib.sha256
+        ).hexdigest()
+        signature = f"sha256={expected_sig}"
+
+        # Should not raise
+        result = verify_webhook_signature(raw_body, signature, timestamp, secret)
+        assert result is True
+
+    def test_verify_invalid_signature(self) -> None:
+        """Test that invalid signature raises error."""
+        import time
+
+        from vaultsandbox import verify_webhook_signature
+        from vaultsandbox.errors import WebhookSignatureVerificationError
+
+        secret = "whsec_test_secret"
+        timestamp = str(int(time.time()))
+        raw_body = '{"type": "email.received", "data": {}}'
+        signature = "sha256=invalid_signature"
+
+        with pytest.raises(WebhookSignatureVerificationError):
+            verify_webhook_signature(raw_body, signature, timestamp, secret)
+
+    def test_verify_expired_timestamp(self) -> None:
+        """Test that expired timestamp raises error."""
+        import hashlib
+        import hmac
+        import time
+
+        from vaultsandbox import verify_webhook_signature
+        from vaultsandbox.errors import WebhookSignatureVerificationError
+
+        secret = "whsec_test_secret"
+        # Timestamp from 10 minutes ago (outside default 5 min tolerance)
+        timestamp = str(int(time.time()) - 600)
+        raw_body = '{"type": "email.received", "data": {}}'
+
+        signed_payload = f"{timestamp}.{raw_body}"
+        expected_sig = hmac.new(
+            secret.encode(), signed_payload.encode(), hashlib.sha256
+        ).hexdigest()
+        signature = f"sha256={expected_sig}"
+
+        with pytest.raises(WebhookSignatureVerificationError):
+            verify_webhook_signature(raw_body, signature, timestamp, secret)
+
+    def test_verify_with_disabled_timestamp_check(self) -> None:
+        """Test signature verification with timestamp check disabled."""
+        import hashlib
+        import hmac
+
+        from vaultsandbox import verify_webhook_signature
+
+        secret = "whsec_test_secret"
+        # Old timestamp
+        timestamp = "1000000000"
+        raw_body = '{"type": "email.received", "data": {}}'
+
+        signed_payload = f"{timestamp}.{raw_body}"
+        expected_sig = hmac.new(
+            secret.encode(), signed_payload.encode(), hashlib.sha256
+        ).hexdigest()
+        signature = f"sha256={expected_sig}"
+
+        # Should pass with timestamp check disabled
+        result = verify_webhook_signature(
+            raw_body, signature, timestamp, secret, tolerance_seconds=0
+        )
+        assert result is True
+
+    def test_verify_bytes_body(self) -> None:
+        """Test signature verification with bytes body."""
+        import hashlib
+        import hmac
+        import time
+
+        from vaultsandbox import verify_webhook_signature
+
+        secret = "whsec_test_secret"
+        timestamp = str(int(time.time()))
+        raw_body = b'{"type": "email.received", "data": {}}'
+
+        signed_payload = f"{timestamp}.{raw_body.decode()}"
+        expected_sig = hmac.new(
+            secret.encode(), signed_payload.encode(), hashlib.sha256
+        ).hexdigest()
+        signature = f"sha256={expected_sig}"
+
+        result = verify_webhook_signature(raw_body, signature, timestamp, secret)
+        assert result is True
+
+    def test_is_timestamp_valid(self) -> None:
+        """Test timestamp validation utility."""
+        import time
+
+        from vaultsandbox import is_timestamp_valid
+
+        # Current timestamp should be valid
+        assert is_timestamp_valid(str(int(time.time()))) is True
+
+        # Old timestamp should be invalid
+        assert is_timestamp_valid(str(int(time.time()) - 600)) is False
+
+        # Invalid format should return False
+        assert is_timestamp_valid("not-a-number") is False
+
+    def test_construct_webhook_event(self) -> None:
+        """Test webhook event construction utility."""
+        from vaultsandbox import construct_webhook_event
+        from vaultsandbox.errors import WebhookSignatureVerificationError
+
+        # Valid event
+        valid_payload = {
+            "id": "evt_123",
+            "object": "event",
+            "createdAt": 1705420800,
+            "type": "email.received",
+            "data": {"from": {"address": "test@example.com"}},
+        }
+        result = construct_webhook_event(valid_payload)
+        assert result == valid_payload
+
+        # Missing field should raise error
+        invalid_payload = {"id": "evt_123", "object": "event"}
+        with pytest.raises(WebhookSignatureVerificationError):
+            construct_webhook_event(invalid_payload)
+
+        # Wrong object type should raise error
+        wrong_object = {
+            "id": "evt_123",
+            "object": "webhook",
+            "createdAt": 1705420800,
+            "type": "email.received",
+            "data": {},
+        }
+        with pytest.raises(WebhookSignatureVerificationError):
+            construct_webhook_event(wrong_object)
