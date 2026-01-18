@@ -550,3 +550,228 @@ class EmailResponse(TypedDict, total=False):
 # Callback types
 EmailCallback = Callable[..., None]
 AsyncEmailCallback = Callable[..., Any]
+
+# Webhook types
+
+# Event types that webhooks can subscribe to
+WebhookEventType = Literal["email.received", "email.stored", "email.deleted"]
+
+# Filter operators for webhook filters
+FilterOperator = Literal[
+    "equals", "contains", "starts_with", "ends_with", "domain", "regex", "exists"
+]
+
+# Fields that can be filtered on
+FilterableField = Literal[
+    "subject",
+    "from.address",
+    "from.name",
+    "to.address",
+    "to.name",
+    "body.text",
+    "body.html",
+]
+
+# Built-in template names
+WebhookTemplateName = Literal[
+    "default", "slack", "discord", "teams", "simple", "notification", "zapier"
+]
+
+# Webhook scope
+WebhookScope = Literal["global", "inbox"]
+
+# Delivery status
+WebhookDeliveryStatus = Literal["success", "failed"]
+
+
+@dataclass
+class FilterRule:
+    """A single filter rule for webhook filtering.
+
+    Attributes:
+        field: Field to filter on.
+        operator: Comparison operator.
+        value: Value to match (max 1000 chars).
+        case_sensitive: Case-sensitive matching (default: False).
+    """
+
+    field: str  # FilterableField or header.X-Custom
+    operator: FilterOperator
+    value: str
+    case_sensitive: bool = False
+
+
+@dataclass
+class FilterConfig:
+    """Filter configuration for webhooks.
+
+    Attributes:
+        rules: Filter rules (max 10).
+        mode: 'all' = AND logic, 'any' = OR logic.
+        require_auth: Require email to pass SPF/DKIM/DMARC checks.
+    """
+
+    rules: list[FilterRule]
+    mode: Literal["all", "any"]
+    require_auth: bool = False
+
+
+@dataclass
+class CustomTemplate:
+    """Custom payload template for webhooks.
+
+    Attributes:
+        body: JSON template with {{variable}} placeholders (max 10000 chars).
+        content_type: Optional Content-Type header override.
+    """
+
+    body: str
+    content_type: str | None = None
+
+
+@dataclass
+class WebhookStats:
+    """Webhook delivery statistics.
+
+    Attributes:
+        total_deliveries: Total number of delivery attempts.
+        successful_deliveries: Number of successful deliveries.
+        failed_deliveries: Number of failed deliveries.
+    """
+
+    total_deliveries: int
+    successful_deliveries: int
+    failed_deliveries: int
+
+
+@dataclass
+class WebhookData:
+    """Webhook data returned from API.
+
+    Attributes:
+        id: Webhook ID (whk_ prefix).
+        url: Target URL.
+        events: Subscribed event types.
+        scope: 'global' or 'inbox'.
+        enabled: Whether webhook is active.
+        created_at: ISO timestamp.
+        inbox_email: Inbox email (inbox webhooks only).
+        inbox_hash: Inbox hash (inbox webhooks only).
+        secret: Signing secret (whsec_ prefix) - only on create/get, not list.
+        template: Template configuration.
+        filter: Filter configuration.
+        description: Human-readable description.
+        updated_at: ISO timestamp of last update.
+        last_delivery_at: ISO timestamp of last delivery attempt.
+        last_delivery_status: Status of last delivery.
+        stats: Delivery statistics (only on get, not list).
+    """
+
+    id: str
+    url: str
+    events: list[str]
+    scope: WebhookScope
+    enabled: bool
+    created_at: str
+    inbox_email: str | None = None
+    inbox_hash: str | None = None
+    secret: str | None = None
+    template: str | CustomTemplate | None = None
+    filter: FilterConfig | None = None
+    description: str | None = None
+    updated_at: str | None = None
+    last_delivery_at: str | None = None
+    last_delivery_status: WebhookDeliveryStatus | None = None
+    stats: WebhookStats | None = None
+
+
+@dataclass
+class WebhookListData:
+    """Webhook list response from API.
+
+    Attributes:
+        webhooks: List of webhooks.
+        total: Total count.
+    """
+
+    webhooks: list[WebhookData]
+    total: int
+
+
+@dataclass
+class TestWebhookResult:
+    """Result of testing a webhook.
+
+    Attributes:
+        success: Whether test succeeded.
+        status_code: HTTP status code from endpoint.
+        response_time: Response time in milliseconds.
+        response_body: Response body (truncated to 1KB).
+        error: Error message if failed.
+        payload_sent: The test payload that was sent.
+    """
+
+    success: bool
+    status_code: int | None = None
+    response_time: int | None = None
+    response_body: str | None = None
+    error: str | None = None
+    payload_sent: Any | None = None
+
+
+@dataclass
+class RotateSecretResult:
+    """Result of rotating a webhook secret.
+
+    Attributes:
+        id: Webhook ID.
+        secret: New signing secret.
+        previous_secret_valid_until: ISO timestamp - old secret valid until this time.
+    """
+
+    id: str
+    secret: str
+    previous_secret_valid_until: str
+
+
+@dataclass
+class CreateWebhookOptions:
+    """Options for creating a webhook.
+
+    Attributes:
+        url: Target URL (HTTPS required in production).
+        events: Event types to subscribe to (max 10).
+        template: Optional payload template name or custom template.
+        filter: Optional event filter configuration.
+        description: Optional description (max 500 chars).
+    """
+
+    url: str
+    events: list[str]
+    template: str | CustomTemplate | None = None
+    filter: FilterConfig | None = None
+    description: str | None = None
+
+
+@dataclass
+class UpdateWebhookOptions:
+    """Options for updating a webhook. All fields are optional.
+
+    Attributes:
+        url: New target URL.
+        events: New event types to subscribe to.
+        template: New template (set to None to remove).
+        filter: New filter config (set to None to remove).
+        description: New description.
+        enabled: Enable/disable the webhook.
+    """
+
+    url: str | None = None
+    events: list[str] | None = None
+    template: str | CustomTemplate | None = field(default=None)
+    filter: FilterConfig | None = field(default=None)
+    description: str | None = None
+    enabled: bool | None = None
+    # Special flags to explicitly remove template/filter (since None means "don't change")
+    _remove_template: bool = field(default=False, repr=False)
+    _remove_filter: bool = field(default=False, repr=False)

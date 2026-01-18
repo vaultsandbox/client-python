@@ -7,9 +7,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from vaultsandbox.errors import ApiError, EmailNotFoundError, InboxNotFoundError, NetworkError
+from vaultsandbox.errors import (
+    ApiError,
+    EmailNotFoundError,
+    InboxNotFoundError,
+    NetworkError,
+    WebhookLimitReachedError,
+)
 from vaultsandbox.http.api_client import ApiClient
-from vaultsandbox.types import ClientConfig
+from vaultsandbox.types import ClientConfig, FilterConfig, FilterRule
 
 
 @pytest.fixture
@@ -282,3 +288,114 @@ class TestCreateInbox:
 
         assert "json" in captured_kwargs
         assert captured_kwargs["json"]["encryption"] == "plain"
+
+
+class TestWebhookLimitError:
+    """Tests for webhook limit reached error handling (lines 194-195)."""
+
+    @pytest.mark.asyncio
+    async def test_409_webhook_limit_raises_error(self, api_client: ApiClient) -> None:
+        """Test 409 with webhook limit pattern raises WebhookLimitReachedError."""
+
+        async def mock_request(*args, **kwargs):
+            return httpx.Response(409, json={"message": "Webhook limit reached"})
+
+        mock_client = MagicMock()
+        mock_client.is_closed = False
+        mock_client.request = mock_request
+        api_client._client = mock_client
+
+        with pytest.raises(WebhookLimitReachedError) as exc_info:
+            await api_client._request("GET", "/test")
+
+        assert "Webhook limit" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_409_without_webhook_limit_raises_api_error(self, api_client: ApiClient) -> None:
+        """Test 409 without webhook limit pattern raises generic ApiError."""
+
+        async def mock_request(*args, **kwargs):
+            return httpx.Response(409, json={"message": "Conflict error"})
+
+        mock_client = MagicMock()
+        mock_client.is_closed = False
+        mock_client.request = mock_request
+        api_client._client = mock_client
+
+        with pytest.raises(ApiError) as exc_info:
+            await api_client._request("GET", "/test")
+
+        assert exc_info.value.status_code == 409
+        assert "Conflict error" in str(exc_info.value)
+
+
+class TestFilterSerialization:
+    """Tests for filter rule/config serialization (lines 401, 411)."""
+
+    def test_serialize_filter_rule_with_case_sensitive(self, api_client: ApiClient) -> None:
+        """Test that case_sensitive=True is included in serialized output (line 401)."""
+        rule = FilterRule(
+            field="subject",
+            operator="contains",
+            value="test",
+            case_sensitive=True,
+        )
+
+        result = api_client._serialize_filter_rule(rule)
+
+        assert result["field"] == "subject"
+        assert result["operator"] == "contains"
+        assert result["value"] == "test"
+        assert result["caseSensitive"] is True
+
+    def test_serialize_filter_rule_without_case_sensitive(self, api_client: ApiClient) -> None:
+        """Test that case_sensitive=False omits caseSensitive from output."""
+        rule = FilterRule(
+            field="subject",
+            operator="contains",
+            value="test",
+            case_sensitive=False,
+        )
+
+        result = api_client._serialize_filter_rule(rule)
+
+        assert "caseSensitive" not in result
+
+    def test_serialize_filter_config_with_require_auth(self, api_client: ApiClient) -> None:
+        """Test that require_auth=True is included in serialized output (line 411)."""
+        rule = FilterRule(field="from", operator="equals", value="test@example.com")
+        config = FilterConfig(
+            rules=[rule],
+            mode="all",
+            require_auth=True,
+        )
+
+        result = api_client._serialize_filter_config(config)
+
+        assert result["mode"] == "all"
+        assert len(result["rules"]) == 1
+        assert result["requireAuth"] is True
+
+    def test_serialize_filter_config_without_require_auth(self, api_client: ApiClient) -> None:
+        """Test that require_auth=False omits requireAuth from output."""
+        rule = FilterRule(field="from", operator="equals", value="test@example.com")
+        config = FilterConfig(
+            rules=[rule],
+            mode="all",
+            require_auth=False,
+        )
+
+        result = api_client._serialize_filter_config(config)
+
+        assert "requireAuth" not in result
+
+
+class TestParseTemplate:
+    """Tests for template parsing (line 455)."""
+
+    def test_parse_template_unknown_dict_returns_none(self, api_client: ApiClient) -> None:
+        """Test that unknown dict format returns None (line 455)."""
+        # Dict without type="custom" should return None
+        result = api_client._parse_template({"type": "unknown", "body": "test"})
+
+        assert result is None

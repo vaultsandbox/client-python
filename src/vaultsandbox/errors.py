@@ -118,3 +118,26 @@ class StrategyError(VaultSandboxError):
     """Delivery strategy configuration or execution error."""
 
     pass
+
+
+class WebhookNotFoundError(VaultSandboxError):
+    """Webhook not found (404)."""
+
+    pass
+
+
+class WebhookLimitReachedError(VaultSandboxError):
+    """Webhook limit reached (409)."""
+
+    pass
+
+
+class WebhookSignatureVerificationError(VaultSandboxError):
+    """Webhook signature verification failure.
+
+    This error indicates that a webhook payload could not be verified
+    as coming from VaultSandbox. This could indicate tampering or
+    an incorrect signing secret.
+    """
+
+    pass

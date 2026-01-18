@@ -54,6 +54,9 @@ from .errors import (
     TimeoutError,
     UnsupportedVersionError,
     VaultSandboxError,
+    WebhookLimitReachedError,
+    WebhookNotFoundError,
+    WebhookSignatureVerificationError,
 )
 from .inbox import Inbox
 from .strategies import Subscription
@@ -63,6 +66,8 @@ from .types import (
     AuthResultsValidation,
     ClientConfig,
     CreateInboxOptions,
+    CreateWebhookOptions,
+    CustomTemplate,
     DeliveryStrategyType,
     DKIMResult,
     DKIMStatus,
@@ -72,22 +77,42 @@ from .types import (
     EmailMetadata,
     EncryptionPolicy,
     ExportedInbox,
+    FilterableField,
+    FilterConfig,
+    FilterOperator,
+    FilterRule,
     InboxData,
     InboxEncryptionMode,
     PollingConfig,
     RawEmail,
     ReverseDNSResult,
     ReverseDNSStatus,
+    RotateSecretResult,
     ServerInfo,
     SPFResult,
     SPFStatus,
     SSEConfig,
     SyncStatus,
+    TestWebhookResult,
+    UpdateWebhookOptions,
     WaitForCountOptions,
     WaitForEmailOptions,
+    WebhookData,
+    WebhookDeliveryStatus,
+    WebhookEventType,
+    WebhookListData,
+    WebhookScope,
+    WebhookStats,
+    WebhookTemplateName,
 )
+from .utils import (
+    construct_webhook_event,
+    is_timestamp_valid,
+    verify_webhook_signature,
+)
+from .webhook import Webhook
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 __all__ = [
     # Main classes
@@ -97,6 +122,7 @@ __all__ = [
     "Inbox",
     "Email",
     "Subscription",
+    "Webhook",
     # Constants
     "DEFAULT_TIMEOUT_MS",
     "DEFAULT_RETRY_DELAY_MS",
@@ -136,6 +162,27 @@ __all__ = [
     "DMARCPolicy",
     "ReverseDNSResult",
     "ReverseDNSStatus",
+    # Webhook types
+    "CreateWebhookOptions",
+    "CustomTemplate",
+    "FilterConfig",
+    "FilterOperator",
+    "FilterRule",
+    "FilterableField",
+    "RotateSecretResult",
+    "TestWebhookResult",
+    "UpdateWebhookOptions",
+    "WebhookData",
+    "WebhookDeliveryStatus",
+    "WebhookEventType",
+    "WebhookListData",
+    "WebhookScope",
+    "WebhookStats",
+    "WebhookTemplateName",
+    # Webhook utilities
+    "construct_webhook_event",
+    "is_timestamp_valid",
+    "verify_webhook_signature",
     # Errors (per Appendix C of VaultSandbox spec)
     "VaultSandboxError",
     "ApiError",
@@ -154,6 +201,9 @@ __all__ = [
     "InvalidAlgorithmError",
     "InvalidSizeError",
     "ServerKeyMismatchError",
+    "WebhookNotFoundError",
+    "WebhookLimitReachedError",
+    "WebhookSignatureVerificationError",
     # Version
     "__version__",
 ]

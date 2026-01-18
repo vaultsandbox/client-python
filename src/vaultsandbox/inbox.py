@@ -14,14 +14,18 @@ from .email import Email
 from .errors import TimeoutError
 from .strategies import Subscription
 from .types import (
+    CreateWebhookOptions,
+    CustomTemplate,
     EmailMetadata,
     ExportedInbox,
+    FilterConfig,
     SyncStatus,
     WaitForCountOptions,
     WaitForEmailOptions,
 )
 from .utils import parse_iso_timestamp
 from .utils.email_utils import matches_filter
+from .webhook import Webhook
 
 if TYPE_CHECKING:
     from .http import ApiClient
@@ -356,3 +360,94 @@ class Inbox:
             server_sig_pk=self.server_sig_pk,
             secret_key=secret_key,
         )
+
+    # Webhook methods
+
+    async def create_webhook(
+        self,
+        url: str,
+        events: list[str],
+        *,
+        template: str | CustomTemplate | None = None,
+        filter: FilterConfig | None = None,
+        description: str | None = None,
+    ) -> Webhook:
+        """Create a webhook for this inbox.
+
+        Webhooks allow you to receive real-time HTTP notifications when
+        events occur in this inbox, such as new emails arriving.
+
+        Args:
+            url: Target URL for webhook deliveries (HTTPS required in production).
+            events: Event types to subscribe to (e.g., ["email.received"]).
+            template: Optional payload template name ("slack", "discord", etc.)
+                or CustomTemplate for custom payloads.
+            filter: Optional filter configuration to only receive matching events.
+            description: Optional human-readable description (max 500 chars).
+
+        Returns:
+            The created Webhook object including the signing secret.
+
+        Raises:
+            WebhookLimitReachedError: If the webhook limit for this inbox is reached.
+
+        Example:
+            ```python
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+                description="Notify when emails arrive"
+            )
+            print(f"Webhook created: {webhook.id}")
+            print(f"Secret: {webhook.secret}")  # Save this for verification!
+            ```
+        """
+        options = CreateWebhookOptions(
+            url=url,
+            events=events,
+            template=template,
+            filter=filter,
+            description=description,
+        )
+        data = await self._api_client.create_inbox_webhook(self.email_address, options)
+        return Webhook._from_data(data, self._api_client, self.email_address)
+
+    async def list_webhooks(self) -> list[Webhook]:
+        """List all webhooks for this inbox.
+
+        Note: The signing secret is not included in list responses.
+        Use get_webhook() to retrieve a webhook with its secret.
+
+        Returns:
+            List of Webhook objects.
+        """
+        result = await self._api_client.list_inbox_webhooks(self.email_address)
+        return [
+            Webhook._from_data(w, self._api_client, self.email_address) for w in result.webhooks
+        ]
+
+    async def get_webhook(self, webhook_id: str) -> Webhook:
+        """Get a specific webhook by ID.
+
+        Args:
+            webhook_id: The webhook ID (whk_ prefix).
+
+        Returns:
+            The Webhook object including secret and stats.
+
+        Raises:
+            WebhookNotFoundError: If the webhook is not found.
+        """
+        data = await self._api_client.get_inbox_webhook(self.email_address, webhook_id)
+        return Webhook._from_data(data, self._api_client, self.email_address)
+
+    async def delete_webhook(self, webhook_id: str) -> None:
+        """Delete a webhook by ID.
+
+        Args:
+            webhook_id: The webhook ID (whk_ prefix).
+
+        Raises:
+            WebhookNotFoundError: If the webhook is not found.
+        """
+        await self._api_client.delete_inbox_webhook(self.email_address, webhook_id)
