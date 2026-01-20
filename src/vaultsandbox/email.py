@@ -6,7 +6,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
-from .types import Attachment, AuthResults, EmailResponse
+from .types import (
+    Attachment,
+    AuthResults,
+    EmailResponse,
+    SpamAnalysisResult,
+    SpamAnalysisStatus,
+)
 from .utils import parse_iso_timestamp
 from .utils.email_utils import decrypt_email_response
 
@@ -32,6 +38,7 @@ class Email:
         attachments: List of attachments.
         links: List of links found in the email.
         auth_results: Email authentication results (SPF/DKIM/DMARC/ReverseDNS).
+        spam_analysis: Spam analysis results (if enabled on server).
         metadata: Raw decrypted metadata (from encryptedMetadata).
         parsed_metadata: Additional metadata from parsed content (from encryptedParsed).
     """
@@ -48,6 +55,7 @@ class Email:
     attachments: list[Attachment]
     links: list[str]
     auth_results: AuthResults
+    spam_analysis: SpamAnalysisResult | None
     metadata: dict[str, Any]
     parsed_metadata: dict[str, Any]
     _inbox: Inbox = field(repr=False)
@@ -86,10 +94,33 @@ class Email:
             attachments=decrypted["attachments"],
             links=decrypted["links"],
             auth_results=decrypted["auth_results"],
+            spam_analysis=decrypted.get("spam_analysis"),
             metadata=decrypted["metadata"],
             parsed_metadata=decrypted["parsed_metadata"],
             _inbox=inbox,
         )
+
+    @property
+    def is_spam(self) -> bool | None:
+        """Check if the email is classified as spam.
+
+        Returns:
+            True if spam, False if not spam, None if not analyzed.
+        """
+        if not self.spam_analysis or self.spam_analysis.status != SpamAnalysisStatus.ANALYZED:
+            return None
+        return self.spam_analysis.is_spam
+
+    @property
+    def spam_score(self) -> float | None:
+        """Get the spam score for this email.
+
+        Returns:
+            Spam score (positive = more spammy), or None if not analyzed.
+        """
+        if not self.spam_analysis or self.spam_analysis.status != SpamAnalysisStatus.ANALYZED:
+            return None
+        return self.spam_analysis.score
 
     async def mark_as_read(self) -> None:
         """Mark this email as read."""

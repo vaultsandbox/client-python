@@ -228,6 +228,7 @@ class ApiClient:
             sse_console=data.get("sseConsole", False),
             allowed_domains=data.get("allowedDomains", []),
             encryption_policy=encryption_policy,
+            spam_analysis_enabled=data.get("spamAnalysisEnabled", False),
         )
 
     # Inbox endpoints
@@ -240,6 +241,7 @@ class ApiClient:
         email_address: str | None = None,
         email_auth: bool | None = None,
         encryption: InboxEncryptionMode | None = None,
+        spam_analysis: bool | None = None,
     ) -> InboxData:
         """Create a new inbox.
 
@@ -250,6 +252,7 @@ class ApiClient:
             email_address: Desired email address or domain.
             email_auth: Enable/disable email authentication checks. None uses server default.
             encryption: Encryption mode ('encrypted' or 'plain'). None uses server default.
+            spam_analysis: Enable/disable spam analysis. None uses server default.
 
         Returns:
             InboxData with the created inbox information.
@@ -265,6 +268,8 @@ class ApiClient:
             body["emailAuth"] = email_auth
         if encryption is not None:
             body["encryption"] = encryption
+        if spam_analysis is not None:
+            body["spamAnalysis"] = spam_analysis
 
         response = await self._request("POST", "/api/inboxes", json=body)
         data = response.json()

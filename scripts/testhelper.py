@@ -20,6 +20,7 @@ async def create_inbox(client: VaultSandboxClient) -> None:
         "expiresAt": exported.expires_at,
         "inboxHash": exported.inbox_hash,
         "encrypted": exported.encrypted,
+        "emailAuth": exported.email_auth,
         "serverSigPk": exported.server_sig_pk,
         "secretKey": exported.secret_key,
         "exportedAt": exported.exported_at,
@@ -37,8 +38,10 @@ async def import_inbox(client: VaultSandboxClient) -> None:
         email_address=data["emailAddress"],
         expires_at=data["expiresAt"],
         inbox_hash=data["inboxHash"],
-        server_sig_pk=data["serverSigPk"],
-        secret_key=data["secretKey"],
+        encrypted=data.get("encrypted", True),
+        email_auth=data.get("emailAuth", True),
+        server_sig_pk=data.get("serverSigPk"),
+        secret_key=data.get("secretKey"),
         exported_at=data.get("exportedAt", ""),
     )
 
@@ -56,8 +59,10 @@ async def read_emails(client: VaultSandboxClient) -> None:
         email_address=data["emailAddress"],
         expires_at=data["expiresAt"],
         inbox_hash=data["inboxHash"],
-        server_sig_pk=data["serverSigPk"],
-        secret_key=data["secretKey"],
+        encrypted=data.get("encrypted", True),
+        email_auth=data.get("emailAuth", True),
+        server_sig_pk=data.get("serverSigPk"),
+        secret_key=data.get("secretKey"),
         exported_at=data.get("exportedAt", ""),
     )
 

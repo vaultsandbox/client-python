@@ -89,6 +89,10 @@ from .types import (
     ReverseDNSStatus,
     RotateSecretResult,
     ServerInfo,
+    SpamAction,
+    SpamAnalysisResult,
+    SpamAnalysisStatus,
+    SpamSymbol,
     SPFResult,
     SPFStatus,
     SSEConfig,
@@ -112,7 +116,7 @@ from .utils import (
 )
 from .webhook import Webhook
 
-__version__ = "0.8.0"
+__version__ = "0.8.5"
 
 __all__ = [
     # Main classes
@@ -162,6 +166,11 @@ __all__ = [
     "DMARCPolicy",
     "ReverseDNSResult",
     "ReverseDNSStatus",
+    # Spam analysis types
+    "SpamAction",
+    "SpamAnalysisResult",
+    "SpamAnalysisStatus",
+    "SpamSymbol",
     # Webhook types
     "CreateWebhookOptions",
     "CustomTemplate",

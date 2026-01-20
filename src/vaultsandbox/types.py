@@ -59,12 +59,17 @@ class CreateInboxOptions:
             - None: Use server default (encrypted if policy is 'always' or 'enabled')
             - 'encrypted': Force encrypted inbox (requires policy to allow)
             - 'plain': Force plain inbox (requires policy to allow)
+        spam_analysis: Enable/disable spam analysis for this inbox.
+            - None: Use server default
+            - True: Enable spam analysis
+            - False: Disable spam analysis
     """
 
     ttl: int | None = None
     email_address: str | None = None
     email_auth: bool | None = None
     encryption: InboxEncryptionMode | None = None
+    spam_analysis: bool | None = None
 
 
 @dataclass
@@ -80,6 +85,7 @@ class ServerInfo:
         sse_console: Whether server SSE console logging is enabled.
         allowed_domains: List of domains allowed for inbox creation.
         encryption_policy: Server encryption policy ('always', 'enabled', 'disabled', 'never').
+        spam_analysis_enabled: Whether spam analysis (Rspamd) is enabled on this server.
     """
 
     server_sig_pk: str
@@ -90,6 +96,7 @@ class ServerInfo:
     sse_console: bool
     allowed_domains: list[str]
     encryption_policy: EncryptionPolicy = "always"
+    spam_analysis_enabled: bool = False
 
 
 @dataclass
@@ -238,6 +245,27 @@ class ReverseDNSStatus(str, Enum):
 class DMARCPolicy(str, Enum):
     NONE = "none"
     QUARANTINE = "quarantine"
+    REJECT = "reject"
+
+
+# Spam analysis status values
+class SpamAnalysisStatus(str, Enum):
+    """Status of spam analysis for an email."""
+
+    ANALYZED = "analyzed"
+    SKIPPED = "skipped"
+    ERROR = "error"
+
+
+# Spam analysis action values
+class SpamAction(str, Enum):
+    """Recommended action from spam analysis."""
+
+    NO_ACTION = "no action"
+    GREYLIST = "greylist"
+    ADD_HEADER = "add header"
+    REWRITE_SUBJECT = "rewrite subject"
+    SOFT_REJECT = "soft reject"
     REJECT = "reject"
 
 
@@ -407,6 +435,48 @@ class AuthResults:
             reverse_dns_passed=reverse_dns_passed,
             failures=failures,
         )
+
+
+@dataclass
+class SpamSymbol:
+    """Individual spam rule/symbol that was triggered.
+
+    Attributes:
+        name: Rule identifier (e.g., 'DKIM_SIGNED', 'FORGED_SENDER').
+        score: Score contribution (positive = spam indicator, negative = legitimacy indicator).
+        description: Human-readable description of what this rule detects.
+        options: Additional context or matched values (e.g., matched URLs).
+    """
+
+    name: str
+    score: float
+    description: str | None = None
+    options: list[str] | None = None
+
+
+@dataclass
+class SpamAnalysisResult:
+    """Result of spam analysis for an email.
+
+    Attributes:
+        status: Analysis status ('analyzed', 'skipped', or 'error').
+        score: Overall spam score (positive = more spammy). Only present when status is 'analyzed'.
+        required_score: Threshold for spam classification. Emails with score >= required_score are spam.
+        action: Recommended action from spam analysis.
+        is_spam: Whether the email is classified as spam (score >= required_score).
+        symbols: List of triggered spam rules/symbols with their scores.
+        processing_time_ms: Time taken for spam analysis in milliseconds.
+        info: Additional information (error message or skip reason).
+    """
+
+    status: SpamAnalysisStatus
+    score: float | None = None
+    required_score: float | None = None
+    action: SpamAction | None = None
+    is_spam: bool | None = None
+    symbols: list[SpamSymbol] = field(default_factory=list)
+    processing_time_ms: int | None = None
+    info: str | None = None
 
 
 @dataclass

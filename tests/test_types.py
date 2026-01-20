@@ -9,6 +9,9 @@ from vaultsandbox.types import (
     DMARCStatus,
     ReverseDNSResult,
     ReverseDNSStatus,
+    SpamAction,
+    SpamAnalysisResult,
+    SpamAnalysisStatus,
     SPFResult,
     SPFStatus,
 )
@@ -17,6 +20,8 @@ from vaultsandbox.utils.email_utils import (
     parse_dkim_results,
     parse_dmarc_result,
     parse_reverse_dns_result,
+    parse_spam_analysis,
+    parse_spam_symbol,
     parse_spf_result,
 )
 
@@ -337,3 +342,275 @@ class TestAuthResultsParsing:
         assert auth.dkim == []
         assert auth.dmarc is None
         assert auth.reverse_dns is None
+
+
+class TestSpamAnalysisParsing:
+    """Tests for parsing spam analysis results from wire format."""
+
+    def test_parse_spam_symbol(self) -> None:
+        """Test parsing spam symbol from wire format."""
+        data = {
+            "name": "DKIM_SIGNED",
+            "score": -0.1,
+            "description": "Message has a valid DKIM signature",
+            "options": ["d=example.com", "s=selector1"],
+        }
+        symbol = parse_spam_symbol(data)
+        assert symbol.name == "DKIM_SIGNED"
+        assert symbol.score == -0.1
+        assert symbol.description == "Message has a valid DKIM signature"
+        assert symbol.options == ["d=example.com", "s=selector1"]
+
+    def test_parse_spam_symbol_minimal(self) -> None:
+        """Test parsing spam symbol with minimal data."""
+        data = {"name": "MISSING_MID", "score": 2.5}
+        symbol = parse_spam_symbol(data)
+        assert symbol.name == "MISSING_MID"
+        assert symbol.score == 2.5
+        assert symbol.description is None
+        assert symbol.options is None
+
+    def test_parse_spam_analysis_analyzed(self) -> None:
+        """Test parsing spam analysis with analyzed status."""
+        data = {
+            "status": "analyzed",
+            "score": 2.3,
+            "requiredScore": 6.0,
+            "action": "no action",
+            "isSpam": False,
+            "symbols": [
+                {"name": "DKIM_SIGNED", "score": -0.1, "description": "Valid DKIM"},
+                {"name": "MISSING_MID", "score": 2.5},
+            ],
+            "processingTimeMs": 45,
+        }
+        result = parse_spam_analysis(data)
+        assert result is not None
+        assert result.status == SpamAnalysisStatus.ANALYZED
+        assert result.score == 2.3
+        assert result.required_score == 6.0
+        assert result.action == SpamAction.NO_ACTION
+        assert result.is_spam is False
+        assert len(result.symbols) == 2
+        assert result.symbols[0].name == "DKIM_SIGNED"
+        assert result.symbols[1].name == "MISSING_MID"
+        assert result.processing_time_ms == 45
+
+    def test_parse_spam_analysis_spam_detected(self) -> None:
+        """Test parsing spam analysis when spam is detected."""
+        data = {
+            "status": "analyzed",
+            "score": 12.7,
+            "requiredScore": 6.0,
+            "action": "reject",
+            "isSpam": True,
+            "symbols": [
+                {"name": "RCVD_IN_SBL", "score": 6.5},
+            ],
+        }
+        result = parse_spam_analysis(data)
+        assert result is not None
+        assert result.status == SpamAnalysisStatus.ANALYZED
+        assert result.is_spam is True
+        assert result.action == SpamAction.REJECT
+
+    def test_parse_spam_analysis_skipped(self) -> None:
+        """Test parsing spam analysis with skipped status."""
+        data = {
+            "status": "skipped",
+            "info": "Spam analysis disabled",
+        }
+        result = parse_spam_analysis(data)
+        assert result is not None
+        assert result.status == SpamAnalysisStatus.SKIPPED
+        assert result.info == "Spam analysis disabled"
+        assert result.score is None
+        assert result.symbols == []
+
+    def test_parse_spam_analysis_error(self) -> None:
+        """Test parsing spam analysis with error status."""
+        data = {
+            "status": "error",
+            "processingTimeMs": 5001,
+            "info": "Rspamd request timed out after 5000ms",
+        }
+        result = parse_spam_analysis(data)
+        assert result is not None
+        assert result.status == SpamAnalysisStatus.ERROR
+        assert result.processing_time_ms == 5001
+        assert result.info == "Rspamd request timed out after 5000ms"
+
+    def test_parse_spam_analysis_invalid_status(self) -> None:
+        """Test parsing spam analysis with invalid status defaults to ERROR."""
+        data = {
+            "status": "unknown_status",
+            "info": "Some info",
+        }
+        result = parse_spam_analysis(data)
+        assert result is not None
+        assert result.status == SpamAnalysisStatus.ERROR
+
+    def test_parse_spam_analysis_invalid_action(self) -> None:
+        """Test parsing spam analysis with invalid action is ignored."""
+        data = {
+            "status": "analyzed",
+            "score": 5.0,
+            "action": "invalid_action",
+            "isSpam": False,
+        }
+        result = parse_spam_analysis(data)
+        assert result is not None
+        assert result.status == SpamAnalysisStatus.ANALYZED
+        assert result.action is None
+
+    def test_parse_spam_analysis_all_actions(self) -> None:
+        """Test parsing all valid spam actions."""
+        actions = [
+            ("no action", SpamAction.NO_ACTION),
+            ("greylist", SpamAction.GREYLIST),
+            ("add header", SpamAction.ADD_HEADER),
+            ("rewrite subject", SpamAction.REWRITE_SUBJECT),
+            ("soft reject", SpamAction.SOFT_REJECT),
+            ("reject", SpamAction.REJECT),
+        ]
+        for action_str, expected_action in actions:
+            data = {"status": "analyzed", "action": action_str}
+            result = parse_spam_analysis(data)
+            assert result is not None
+            assert result.action == expected_action, f"Failed for action: {action_str}"
+
+    def test_parse_spam_analysis_none(self) -> None:
+        """Test parsing spam analysis with None input."""
+        assert parse_spam_analysis(None) is None
+        assert parse_spam_analysis({}) is None
+
+
+class TestEmailSpamProperties:
+    """Tests for Email.is_spam and Email.spam_score properties."""
+
+    def test_is_spam_when_analyzed_and_spam(self) -> None:
+        """Test is_spam returns True when email is classified as spam."""
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        from vaultsandbox.email import Email
+
+        mock_inbox = MagicMock()
+        email = Email(
+            id="test-id",
+            from_address="sender@example.com",
+            to=["recipient@example.com"],
+            subject="Test",
+            received_at=datetime.now(),
+            is_read=False,
+            text="Test body",
+            html=None,
+            headers={},
+            attachments=[],
+            links=[],
+            auth_results=AuthResults(),
+            spam_analysis=SpamAnalysisResult(
+                status=SpamAnalysisStatus.ANALYZED,
+                score=12.5,
+                is_spam=True,
+            ),
+            metadata={},
+            parsed_metadata={},
+            _inbox=mock_inbox,
+        )
+        assert email.is_spam is True
+        assert email.spam_score == 12.5
+
+    def test_is_spam_when_analyzed_not_spam(self) -> None:
+        """Test is_spam returns False when email is not spam."""
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        from vaultsandbox.email import Email
+
+        mock_inbox = MagicMock()
+        email = Email(
+            id="test-id",
+            from_address="sender@example.com",
+            to=["recipient@example.com"],
+            subject="Test",
+            received_at=datetime.now(),
+            is_read=False,
+            text="Test body",
+            html=None,
+            headers={},
+            attachments=[],
+            links=[],
+            auth_results=AuthResults(),
+            spam_analysis=SpamAnalysisResult(
+                status=SpamAnalysisStatus.ANALYZED,
+                score=2.3,
+                is_spam=False,
+            ),
+            metadata={},
+            parsed_metadata={},
+            _inbox=mock_inbox,
+        )
+        assert email.is_spam is False
+        assert email.spam_score == 2.3
+
+    def test_is_spam_when_skipped(self) -> None:
+        """Test is_spam returns None when analysis was skipped."""
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        from vaultsandbox.email import Email
+
+        mock_inbox = MagicMock()
+        email = Email(
+            id="test-id",
+            from_address="sender@example.com",
+            to=["recipient@example.com"],
+            subject="Test",
+            received_at=datetime.now(),
+            is_read=False,
+            text="Test body",
+            html=None,
+            headers={},
+            attachments=[],
+            links=[],
+            auth_results=AuthResults(),
+            spam_analysis=SpamAnalysisResult(
+                status=SpamAnalysisStatus.SKIPPED,
+                info="Spam analysis disabled",
+            ),
+            metadata={},
+            parsed_metadata={},
+            _inbox=mock_inbox,
+        )
+        assert email.is_spam is None
+        assert email.spam_score is None
+
+    def test_is_spam_when_no_spam_analysis(self) -> None:
+        """Test is_spam returns None when spam_analysis is None."""
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        from vaultsandbox.email import Email
+
+        mock_inbox = MagicMock()
+        email = Email(
+            id="test-id",
+            from_address="sender@example.com",
+            to=["recipient@example.com"],
+            subject="Test",
+            received_at=datetime.now(),
+            is_read=False,
+            text="Test body",
+            html=None,
+            headers={},
+            attachments=[],
+            links=[],
+            auth_results=AuthResults(),
+            spam_analysis=None,
+            metadata={},
+            parsed_metadata={},
+            _inbox=mock_inbox,
+        )
+        assert email.is_spam is None
+        assert email.spam_score is None

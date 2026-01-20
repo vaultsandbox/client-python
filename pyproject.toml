@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "vaultsandbox"
-version = "0.8.0"
+version = "0.8.5"
 description = "Python SDK for VaultSandbox - Secure, receive-only SMTP server for QA/testing with quantum-safe encryption"
 readme = "README.md"
 license = "Apache-2.0"

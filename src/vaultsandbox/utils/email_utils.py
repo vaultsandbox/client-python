@@ -18,6 +18,10 @@ from ..types import (
     EmailResponse,
     ReverseDNSResult,
     ReverseDNSStatus,
+    SpamAction,
+    SpamAnalysisResult,
+    SpamAnalysisStatus,
+    SpamSymbol,
     SPFResult,
     SPFStatus,
     WaitForEmailOptions,
@@ -125,6 +129,67 @@ def parse_auth_results(data: dict[str, Any] | None) -> AuthResults:
     )
 
 
+def parse_spam_symbol(data: dict[str, Any]) -> SpamSymbol:
+    """Parse a spam symbol from decrypted data.
+
+    Args:
+        data: The spam symbol data.
+
+    Returns:
+        SpamSymbol instance.
+    """
+    return SpamSymbol(
+        name=data.get("name", ""),
+        score=float(data.get("score", 0)),
+        description=data.get("description"),
+        options=data.get("options"),
+    )
+
+
+def parse_spam_analysis(data: dict[str, Any] | None) -> SpamAnalysisResult | None:
+    """Parse spam analysis results from decrypted data.
+
+    Args:
+        data: The spam analysis data.
+
+    Returns:
+        SpamAnalysisResult or None if no data.
+    """
+    if not data:
+        return None
+
+    # Parse status
+    status_str = data.get("status", "error")
+    try:
+        status = SpamAnalysisStatus(status_str)
+    except ValueError:
+        status = SpamAnalysisStatus.ERROR
+
+    # Parse action if present
+    action = None
+    action_str = data.get("action")
+    if action_str:
+        try:
+            action = SpamAction(action_str)
+        except ValueError:
+            action = None
+
+    # Parse symbols
+    symbols_data = data.get("symbols", [])
+    symbols = [parse_spam_symbol(s) for s in symbols_data] if symbols_data else []
+
+    return SpamAnalysisResult(
+        status=status,
+        score=data.get("score"),
+        required_score=data.get("requiredScore"),
+        action=action,
+        is_spam=data.get("isSpam"),
+        symbols=symbols,
+        processing_time_ms=data.get("processingTimeMs"),
+        info=data.get("info"),
+    )
+
+
 def parse_attachments(data: list[dict[str, Any]] | None) -> list[Attachment]:
     """Parse attachments from decrypted data.
 
@@ -195,6 +260,7 @@ def decode_plain_email_response(
         "attachments": parse_attachments(parsed.get("attachments")),
         "links": parsed.get("links", []),
         "auth_results": parse_auth_results(parsed.get("authResults")),
+        "spam_analysis": parse_spam_analysis(parsed.get("spamAnalysis")),
         "metadata": metadata,
         "parsed_metadata": parsed.get("metadata", {}),
     }
@@ -252,6 +318,7 @@ def decrypt_email_response(
             "attachments": parse_attachments(parsed.get("attachments")),
             "links": parsed.get("links", []),
             "auth_results": parse_auth_results(parsed.get("authResults")),
+            "spam_analysis": parse_spam_analysis(parsed.get("spamAnalysis")),
             "metadata": metadata,
             "parsed_metadata": parsed.get("metadata", {}),
         }
