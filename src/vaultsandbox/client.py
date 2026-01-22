@@ -348,6 +348,7 @@ class VaultSandboxClient:
             email_auth=options.email_auth,
             encryption=options.encryption,
             spam_analysis=options.spam_analysis,
+            chaos=options.chaos,
         )
 
         # Parse expires_at timestamp

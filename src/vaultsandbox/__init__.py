@@ -64,7 +64,10 @@ from .types import (
     Attachment,
     AuthResults,
     AuthResultsValidation,
+    BlackholeConfig,
+    ChaosConfig,
     ClientConfig,
+    ConnectionDropConfig,
     CreateInboxOptions,
     CreateWebhookOptions,
     CustomTemplate,
@@ -81,9 +84,14 @@ from .types import (
     FilterConfig,
     FilterOperator,
     FilterRule,
+    GreylistConfig,
+    GreylistTrackBy,
     InboxData,
     InboxEncryptionMode,
+    LatencyConfig,
     PollingConfig,
+    RandomErrorConfig,
+    RandomErrorType,
     RawEmail,
     ReverseDNSResult,
     ReverseDNSStatus,
@@ -116,7 +124,7 @@ from .utils import (
 )
 from .webhook import Webhook
 
-__version__ = "0.8.5"
+__version__ = "0.9.0"
 
 __all__ = [
     # Main classes
@@ -188,6 +196,15 @@ __all__ = [
     "WebhookScope",
     "WebhookStats",
     "WebhookTemplateName",
+    # Chaos types
+    "BlackholeConfig",
+    "ChaosConfig",
+    "ConnectionDropConfig",
+    "GreylistConfig",
+    "GreylistTrackBy",
+    "LatencyConfig",
+    "RandomErrorConfig",
+    "RandomErrorType",
     # Webhook utilities
     "construct_webhook_event",
     "is_timestamp_valid",

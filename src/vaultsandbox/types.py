@@ -63,6 +63,8 @@ class CreateInboxOptions:
             - None: Use server default
             - True: Enable spam analysis
             - False: Disable spam analysis
+        chaos: Initial chaos configuration for this inbox.
+            Requires chaos to be enabled globally on the server.
     """
 
     ttl: int | None = None
@@ -70,6 +72,7 @@ class CreateInboxOptions:
     email_auth: bool | None = None
     encryption: InboxEncryptionMode | None = None
     spam_analysis: bool | None = None
+    chaos: ChaosConfig | None = None
 
 
 @dataclass
@@ -86,6 +89,7 @@ class ServerInfo:
         allowed_domains: List of domains allowed for inbox creation.
         encryption_policy: Server encryption policy ('always', 'enabled', 'disabled', 'never').
         spam_analysis_enabled: Whether spam analysis (Rspamd) is enabled on this server.
+        chaos_enabled: Whether chaos engineering is enabled globally on this server.
     """
 
     server_sig_pk: str
@@ -97,6 +101,7 @@ class ServerInfo:
     allowed_domains: list[str]
     encryption_policy: EncryptionPolicy = "always"
     spam_analysis_enabled: bool = False
+    chaos_enabled: bool = False
 
 
 @dataclass
@@ -845,3 +850,141 @@ class UpdateWebhookOptions:
     # Special flags to explicitly remove template/filter (since None means "don't change")
     _remove_template: bool = field(default=False, repr=False)
     _remove_filter: bool = field(default=False, repr=False)
+
+
+# Chaos configuration types
+
+# Greylist tracking method values
+GreylistTrackBy = Literal["ip", "sender", "ip_sender"]
+
+# Random error type values
+RandomErrorType = Literal["temporary", "permanent"]
+
+
+@dataclass
+class LatencyConfig:
+    """Latency injection configuration for chaos testing.
+
+    Injects artificial delays into email processing.
+
+    Attributes:
+        enabled: Enable latency injection.
+        min_delay_ms: Minimum delay in milliseconds (default: 500).
+        max_delay_ms: Maximum delay in milliseconds (default: 10000, max: 60000).
+        jitter: Randomize delay within range. False = fixed at max_delay_ms (default: True).
+        probability: Probability of applying delay, 0.0-1.0 (default: 1.0).
+    """
+
+    enabled: bool
+    min_delay_ms: int | None = None
+    max_delay_ms: int | None = None
+    jitter: bool | None = None
+    probability: float | None = None
+
+
+@dataclass
+class ConnectionDropConfig:
+    """Connection drop configuration for chaos testing.
+
+    Simulates connection failures by dropping the SMTP connection.
+    Connection is always dropped after receiving email data, before sending 250 OK.
+
+    Attributes:
+        enabled: Enable connection dropping.
+        probability: Probability of dropping, 0.0-1.0 (default: 1.0).
+        graceful: Use graceful close (FIN) vs abrupt (RST) (default: True).
+    """
+
+    enabled: bool
+    probability: float | None = None
+    graceful: bool | None = None
+
+
+@dataclass
+class RandomErrorConfig:
+    """Random error configuration for chaos testing.
+
+    Returns random SMTP error codes.
+
+    Attributes:
+        enabled: Enable random error generation.
+        error_rate: Probability of returning an error, 0.0-1.0 (default: 0.1).
+        error_types: Types of errors to return (default: ["temporary"]).
+            - "temporary": 4xx errors (421, 450, 451, 452).
+            - "permanent": 5xx errors (550, 551, 552, 553, 554).
+    """
+
+    enabled: bool
+    error_rate: float | None = None
+    error_types: list[RandomErrorType] | None = None
+
+
+@dataclass
+class GreylistConfig:
+    """Greylisting configuration for chaos testing.
+
+    Simulates greylisting behavior (reject first attempt, accept on retry).
+
+    Attributes:
+        enabled: Enable greylisting simulation.
+        retry_window_ms: Window for tracking retry attempts in milliseconds (default: 300000).
+        max_attempts: Number of attempts before accepting (default: 2).
+        track_by: How to identify unique senders (default: "ip_sender").
+            - "ip": Track by sender IP address only.
+            - "sender": Track by sender email address only.
+            - "ip_sender": Track by combination of IP and sender email.
+    """
+
+    enabled: bool
+    retry_window_ms: int | None = None
+    max_attempts: int | None = None
+    track_by: GreylistTrackBy | None = None
+
+
+@dataclass
+class BlackholeConfig:
+    """Blackhole configuration for chaos testing.
+
+    Accepts emails but silently discards them (does not store).
+
+    Attributes:
+        enabled: Enable blackhole mode.
+        trigger_webhooks: Whether to still trigger webhooks (default: False).
+    """
+
+    enabled: bool
+    trigger_webhooks: bool | None = None
+
+
+@dataclass
+class ChaosConfig:
+    """Chaos configuration for an inbox.
+
+    Chaos engineering allows controlled injection of failures and delays
+    into email processing to test system resilience.
+
+    When multiple chaos types are enabled, they are evaluated in priority order
+    (first match wins):
+    1. Connection Drop (most disruptive)
+    2. Greylisting
+    3. Random Error
+    4. Blackhole
+    5. Latency (least disruptive)
+
+    Attributes:
+        enabled: Master switch for chaos on this inbox.
+        expires_at: Auto-disable chaos after this timestamp (ISO 8601).
+        latency: Latency injection settings.
+        connection_drop: Connection drop settings.
+        random_error: Random error settings.
+        greylist: Greylisting settings.
+        blackhole: Blackhole mode settings.
+    """
+
+    enabled: bool
+    expires_at: str | None = None
+    latency: LatencyConfig | None = None
+    connection_drop: ConnectionDropConfig | None = None
+    random_error: RandomErrorConfig | None = None
+    greylist: GreylistConfig | None = None
+    blackhole: BlackholeConfig | None = None

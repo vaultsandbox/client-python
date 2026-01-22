@@ -14,11 +14,17 @@ from .email import Email
 from .errors import TimeoutError
 from .strategies import Subscription
 from .types import (
+    BlackholeConfig,
+    ChaosConfig,
+    ConnectionDropConfig,
     CreateWebhookOptions,
     CustomTemplate,
     EmailMetadata,
     ExportedInbox,
     FilterConfig,
+    GreylistConfig,
+    LatencyConfig,
+    RandomErrorConfig,
     SyncStatus,
     WaitForCountOptions,
     WaitForEmailOptions,
@@ -451,3 +457,128 @@ class Inbox:
             WebhookNotFoundError: If the webhook is not found.
         """
         await self._api_client.delete_inbox_webhook(self.email_address, webhook_id)
+
+    # Chaos methods
+
+    async def get_chaos(self) -> ChaosConfig:
+        """Get the chaos configuration for this inbox.
+
+        Chaos engineering allows controlled injection of failures and delays
+        into email processing to test system resilience.
+
+        Returns:
+            ChaosConfig with current chaos settings.
+
+        Raises:
+            ApiError: If chaos is disabled globally on the server (403).
+
+        Example:
+            ```python
+            chaos = await inbox.get_chaos()
+            if chaos.enabled:
+                print("Chaos is enabled")
+                if chaos.latency and chaos.latency.enabled:
+                    print(f"Latency: {chaos.latency.min_delay_ms}-{chaos.latency.max_delay_ms}ms")
+            ```
+        """
+        return await self._api_client.get_inbox_chaos(self.email_address)
+
+    async def set_chaos(
+        self,
+        *,
+        enabled: bool,
+        expires_at: str | None = None,
+        latency: LatencyConfig | None = None,
+        connection_drop: ConnectionDropConfig | None = None,
+        random_error: RandomErrorConfig | None = None,
+        greylist: GreylistConfig | None = None,
+        blackhole: BlackholeConfig | None = None,
+    ) -> ChaosConfig:
+        """Set the chaos configuration for this inbox.
+
+        Chaos engineering allows controlled injection of failures and delays
+        into email processing to test system resilience.
+
+        When multiple chaos types are enabled, they are evaluated in priority order
+        (first match wins):
+        1. Connection Drop (most disruptive)
+        2. Greylisting
+        3. Random Error
+        4. Blackhole
+        5. Latency (least disruptive)
+
+        Args:
+            enabled: Master switch for chaos on this inbox.
+            expires_at: Auto-disable chaos after this timestamp (ISO 8601 format).
+            latency: Latency injection settings.
+            connection_drop: Connection drop settings.
+            random_error: Random error settings.
+            greylist: Greylisting settings.
+            blackhole: Blackhole mode settings.
+
+        Returns:
+            ChaosConfig with the applied settings (including server defaults).
+
+        Raises:
+            ApiError: If chaos is disabled globally (403) or validation fails (400).
+
+        Example:
+            ```python
+            # Enable latency injection with 50% probability
+            chaos = await inbox.set_chaos(
+                enabled=True,
+                latency=LatencyConfig(
+                    enabled=True,
+                    min_delay_ms=1000,
+                    max_delay_ms=5000,
+                    probability=0.5,
+                ),
+            )
+
+            # Enable random temporary errors
+            chaos = await inbox.set_chaos(
+                enabled=True,
+                random_error=RandomErrorConfig(
+                    enabled=True,
+                    error_rate=0.2,
+                    error_types=["temporary"],
+                ),
+            )
+
+            # Enable greylisting simulation
+            chaos = await inbox.set_chaos(
+                enabled=True,
+                greylist=GreylistConfig(
+                    enabled=True,
+                    max_attempts=3,
+                ),
+            )
+            ```
+        """
+        config = ChaosConfig(
+            enabled=enabled,
+            expires_at=expires_at,
+            latency=latency,
+            connection_drop=connection_drop,
+            random_error=random_error,
+            greylist=greylist,
+            blackhole=blackhole,
+        )
+        return await self._api_client.set_inbox_chaos(self.email_address, config)
+
+    async def disable_chaos(self) -> None:
+        """Disable all chaos for this inbox.
+
+        This is equivalent to calling `set_chaos(enabled=False)` or
+        making a DELETE request to the chaos endpoint.
+
+        Raises:
+            ApiError: If chaos is disabled globally (403) or other API errors.
+
+        Example:
+            ```python
+            # Disable chaos after testing
+            await inbox.disable_chaos()
+            ```
+        """
+        await self._api_client.disable_inbox_chaos(self.email_address)

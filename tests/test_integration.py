@@ -1815,3 +1815,314 @@ class TestWebhookSignatureVerification:
         }
         with pytest.raises(WebhookSignatureVerificationError):
             construct_webhook_event(wrong_object)
+
+
+class TestChaos:
+    """Tests for chaos configuration functionality.
+
+    Note: These tests require chaos to be enabled globally on the server.
+    If chaos is disabled, tests will be skipped.
+    """
+
+    @pytest.fixture
+    async def chaos_enabled_client(self, api_config: dict[str, str]) -> VaultSandboxClient:
+        """Create client and check if chaos is enabled, skip if not."""
+        client = VaultSandboxClient(**api_config)
+        await client._ensure_initialized()
+        server_info = await client.get_server_info()
+        if not server_info.chaos_enabled:
+            await client.close()
+            pytest.skip("Chaos is not enabled on the server")
+        return client
+
+    @pytest.mark.asyncio
+    async def test_get_chaos_default(self, chaos_enabled_client: VaultSandboxClient) -> None:
+        """Test getting default chaos configuration for a new inbox."""
+        async with chaos_enabled_client as client:
+            inbox = await client.create_inbox()
+
+            chaos = await inbox.get_chaos()
+
+            # Default should be disabled
+            assert chaos.enabled is False
+
+    @pytest.mark.asyncio
+    async def test_set_chaos_enabled(self, chaos_enabled_client: VaultSandboxClient) -> None:
+        """Test enabling chaos on an inbox."""
+        async with chaos_enabled_client as client:
+            inbox = await client.create_inbox()
+
+            chaos = await inbox.set_chaos(enabled=True)
+
+            assert chaos.enabled is True
+
+    @pytest.mark.asyncio
+    async def test_disable_chaos(self, chaos_enabled_client: VaultSandboxClient) -> None:
+        """Test disabling chaos on an inbox."""
+        async with chaos_enabled_client as client:
+            inbox = await client.create_inbox()
+
+            # Enable chaos first
+            await inbox.set_chaos(enabled=True)
+
+            # Then disable it
+            await inbox.disable_chaos()
+
+            # Verify it's disabled
+            chaos = await inbox.get_chaos()
+            assert chaos.enabled is False
+
+    @pytest.mark.asyncio
+    async def test_set_chaos_with_latency(self, chaos_enabled_client: VaultSandboxClient) -> None:
+        """Test setting chaos with latency injection configuration."""
+        from vaultsandbox import LatencyConfig
+
+        async with chaos_enabled_client as client:
+            inbox = await client.create_inbox()
+
+            chaos = await inbox.set_chaos(
+                enabled=True,
+                latency=LatencyConfig(
+                    enabled=True,
+                    min_delay_ms=1000,
+                    max_delay_ms=5000,
+                    jitter=True,
+                    probability=0.5,
+                ),
+            )
+
+            assert chaos.enabled is True
+            assert chaos.latency is not None
+            assert chaos.latency.enabled is True
+            assert chaos.latency.min_delay_ms == 1000
+            assert chaos.latency.max_delay_ms == 5000
+            assert chaos.latency.jitter is True
+            assert chaos.latency.probability == 0.5
+
+    @pytest.mark.asyncio
+    async def test_set_chaos_with_random_error(
+        self, chaos_enabled_client: VaultSandboxClient
+    ) -> None:
+        """Test setting chaos with random error configuration."""
+        from vaultsandbox import RandomErrorConfig
+
+        async with chaos_enabled_client as client:
+            inbox = await client.create_inbox()
+
+            chaos = await inbox.set_chaos(
+                enabled=True,
+                random_error=RandomErrorConfig(
+                    enabled=True,
+                    error_rate=0.2,
+                    error_types=["temporary"],
+                ),
+            )
+
+            assert chaos.enabled is True
+            assert chaos.random_error is not None
+            assert chaos.random_error.enabled is True
+            assert chaos.random_error.error_rate == 0.2
+            assert chaos.random_error.error_types == ["temporary"]
+
+    @pytest.mark.asyncio
+    async def test_set_chaos_with_greylist(self, chaos_enabled_client: VaultSandboxClient) -> None:
+        """Test setting chaos with greylisting configuration."""
+        from vaultsandbox import GreylistConfig
+
+        async with chaos_enabled_client as client:
+            inbox = await client.create_inbox()
+
+            chaos = await inbox.set_chaos(
+                enabled=True,
+                greylist=GreylistConfig(
+                    enabled=True,
+                    retry_window_ms=600000,
+                    max_attempts=3,
+                    track_by="ip_sender",
+                ),
+            )
+
+            assert chaos.enabled is True
+            assert chaos.greylist is not None
+            assert chaos.greylist.enabled is True
+            assert chaos.greylist.retry_window_ms == 600000
+            assert chaos.greylist.max_attempts == 3
+            assert chaos.greylist.track_by == "ip_sender"
+
+    @pytest.mark.asyncio
+    async def test_set_chaos_with_blackhole(self, chaos_enabled_client: VaultSandboxClient) -> None:
+        """Test setting chaos with blackhole configuration."""
+        from vaultsandbox import BlackholeConfig
+
+        async with chaos_enabled_client as client:
+            inbox = await client.create_inbox()
+
+            chaos = await inbox.set_chaos(
+                enabled=True,
+                blackhole=BlackholeConfig(
+                    enabled=True,
+                    trigger_webhooks=False,
+                ),
+            )
+
+            assert chaos.enabled is True
+            assert chaos.blackhole is not None
+            assert chaos.blackhole.enabled is True
+            assert chaos.blackhole.trigger_webhooks is False
+
+    @pytest.mark.asyncio
+    async def test_set_chaos_with_connection_drop(
+        self, chaos_enabled_client: VaultSandboxClient
+    ) -> None:
+        """Test setting chaos with connection drop configuration."""
+        from vaultsandbox import ConnectionDropConfig
+
+        async with chaos_enabled_client as client:
+            inbox = await client.create_inbox()
+
+            chaos = await inbox.set_chaos(
+                enabled=True,
+                connection_drop=ConnectionDropConfig(
+                    enabled=True,
+                    probability=0.3,
+                    graceful=False,
+                ),
+            )
+
+            assert chaos.enabled is True
+            assert chaos.connection_drop is not None
+            assert chaos.connection_drop.enabled is True
+            assert chaos.connection_drop.probability == 0.3
+            assert chaos.connection_drop.graceful is False
+
+    @pytest.mark.asyncio
+    async def test_set_chaos_with_multiple_types(
+        self, chaos_enabled_client: VaultSandboxClient
+    ) -> None:
+        """Test setting chaos with multiple chaos types enabled."""
+        from vaultsandbox import LatencyConfig, RandomErrorConfig
+
+        async with chaos_enabled_client as client:
+            inbox = await client.create_inbox()
+
+            chaos = await inbox.set_chaos(
+                enabled=True,
+                latency=LatencyConfig(
+                    enabled=True,
+                    min_delay_ms=500,
+                    max_delay_ms=2000,
+                ),
+                random_error=RandomErrorConfig(
+                    enabled=True,
+                    error_rate=0.1,
+                    error_types=["temporary", "permanent"],
+                ),
+            )
+
+            assert chaos.enabled is True
+            assert chaos.latency is not None
+            assert chaos.latency.enabled is True
+            assert chaos.random_error is not None
+            assert chaos.random_error.enabled is True
+
+    @pytest.mark.asyncio
+    async def test_set_chaos_with_expires_at(
+        self, chaos_enabled_client: VaultSandboxClient
+    ) -> None:
+        """Test setting chaos with auto-expiration timestamp."""
+        from datetime import datetime, timedelta, timezone
+
+        from vaultsandbox import LatencyConfig
+
+        async with chaos_enabled_client as client:
+            inbox = await client.create_inbox()
+
+            # Set expiration to 1 hour from now
+            expires_at = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+
+            chaos = await inbox.set_chaos(
+                enabled=True,
+                expires_at=expires_at,
+                latency=LatencyConfig(enabled=True),
+            )
+
+            assert chaos.enabled is True
+            assert chaos.expires_at is not None
+
+    @pytest.mark.asyncio
+    async def test_create_inbox_with_chaos(self, chaos_enabled_client: VaultSandboxClient) -> None:
+        """Test creating an inbox with initial chaos configuration."""
+        from vaultsandbox import ChaosConfig, LatencyConfig
+
+        async with chaos_enabled_client as client:
+            inbox = await client.create_inbox(
+                CreateInboxOptions(
+                    chaos=ChaosConfig(
+                        enabled=True,
+                        latency=LatencyConfig(
+                            enabled=True,
+                            min_delay_ms=100,
+                            max_delay_ms=500,
+                        ),
+                    ),
+                )
+            )
+
+            # Verify chaos was applied
+            chaos = await inbox.get_chaos()
+            assert chaos.enabled is True
+            assert chaos.latency is not None
+            assert chaos.latency.enabled is True
+
+    @pytest.mark.asyncio
+    async def test_chaos_update_config(self, chaos_enabled_client: VaultSandboxClient) -> None:
+        """Test updating chaos configuration."""
+        from vaultsandbox import LatencyConfig, RandomErrorConfig
+
+        async with chaos_enabled_client as client:
+            inbox = await client.create_inbox()
+
+            # Set initial config with latency
+            await inbox.set_chaos(
+                enabled=True,
+                latency=LatencyConfig(enabled=True, min_delay_ms=1000),
+            )
+
+            # Update to use random error instead
+            chaos = await inbox.set_chaos(
+                enabled=True,
+                random_error=RandomErrorConfig(enabled=True, error_rate=0.5),
+            )
+
+            assert chaos.enabled is True
+            assert chaos.random_error is not None
+            assert chaos.random_error.enabled is True
+            assert chaos.random_error.error_rate == 0.5
+
+    @pytest.mark.asyncio
+    async def test_chaos_disabled_via_set(self, chaos_enabled_client: VaultSandboxClient) -> None:
+        """Test disabling chaos via set_chaos with enabled=False."""
+        from vaultsandbox import LatencyConfig
+
+        async with chaos_enabled_client as client:
+            inbox = await client.create_inbox()
+
+            # Enable chaos first
+            await inbox.set_chaos(
+                enabled=True,
+                latency=LatencyConfig(enabled=True),
+            )
+
+            # Disable via set_chaos
+            chaos = await inbox.set_chaos(enabled=False)
+
+            assert chaos.enabled is False
+
+    @pytest.mark.asyncio
+    async def test_server_info_chaos_enabled(self, api_config: dict[str, str]) -> None:
+        """Test that server info includes chaos_enabled field."""
+        async with VaultSandboxClient(**api_config) as client:
+            server_info = await client.get_server_info()
+
+            # chaos_enabled should be a boolean
+            assert isinstance(server_info.chaos_enabled, bool)
