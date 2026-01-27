@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.1] - 2026-01-26
+
+### Changed
+
+- Refactored ApiClient into domain-specific classes
+- Improved parameter validation and error messages
+- Fixed SSE race conditions and timestamp error handling
+- Fixed base64 error handling
+- Added webhook URL validation
+
+### Fixed
+
+- Fixed HTTP client leak during SSE reconnection
+- Fixed unhandled UnicodeDecodeError in webhook signature verification
+- Improved error handling during SSE unsubscribe sync
+
 ## [0.9.0] - 2026-01-22
 
 ### Added

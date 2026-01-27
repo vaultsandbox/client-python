@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 from .crypto import Keypair, decrypt_metadata, to_base64url
 from .crypto.constants import EXPORT_VERSION
 from .email import Email
-from .errors import TimeoutError
+from .errors import InvalidPayloadError, TimeoutError
 from .strategies import Subscription
 from .types import (
     BlackholeConfig,
@@ -29,7 +29,7 @@ from .types import (
     WaitForCountOptions,
     WaitForEmailOptions,
 )
-from .utils import parse_iso_timestamp
+from .utils import parse_iso_timestamp, validate_email_id
 from .utils.email_utils import matches_filter
 from .webhook import Webhook
 
@@ -82,8 +82,12 @@ class Inbox:
 
         Returns:
             List of EmailMetadata objects.
+
+        Raises:
+            InvalidPayloadError: If email metadata cannot be decoded.
         """
         import base64
+        import binascii
         import json
 
         list_responses = await self._api_client.list_emails(
@@ -104,7 +108,10 @@ class Inbox:
             else:
                 # Plain email - decode base64 JSON
                 metadata_b64 = email_data.get("metadata", "")
-                metadata = json.loads(base64.b64decode(metadata_b64).decode("utf-8"))
+                try:
+                    metadata = json.loads(base64.b64decode(metadata_b64).decode("utf-8"))
+                except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError) as e:
+                    raise InvalidPayloadError(f"Failed to decode email metadata: {e}") from e
 
             emails.append(
                 EmailMetadata(
@@ -137,8 +144,12 @@ class Inbox:
 
         Returns:
             RawEmail object with id and raw MIME content.
+
+        Raises:
+            InvalidPayloadError: If raw email content cannot be decoded.
         """
         import base64
+        import binascii
 
         from .crypto import decrypt_raw
         from .types import RawEmail
@@ -158,7 +169,10 @@ class Inbox:
             )
         else:
             # Plain email - decode base64
-            raw = base64.b64decode(raw_response.get("raw", "")).decode("utf-8")
+            try:
+                raw = base64.b64decode(raw_response.get("raw", "")).decode("utf-8")
+            except (binascii.Error, UnicodeDecodeError) as e:
+                raise InvalidPayloadError(f"Failed to decode raw email: {e}") from e
 
         return RawEmail(id=raw_response["id"], raw=raw)
 
@@ -175,7 +189,11 @@ class Inbox:
 
         Args:
             email_id: The email ID.
+
+        Raises:
+            ValueError: If the email ID format is invalid.
         """
+        validate_email_id(email_id)
         await self._api_client.delete_email(self.email_address, email_id)
 
     async def delete(self) -> None:
@@ -377,8 +395,13 @@ class Inbox:
         template: str | CustomTemplate | None = None,
         filter: FilterConfig | None = None,
         description: str | None = None,
+        allow_http: bool = False,
     ) -> Webhook:
         """Create a webhook for this inbox.
+
+        Webhooks are scoped to individual inboxes. Each webhook only receives
+        events for the inbox it was created on. To receive notifications for
+        multiple inboxes, create a webhook on each inbox separately.
 
         Webhooks allow you to receive real-time HTTP notifications when
         events occur in this inbox, such as new emails arriving.
@@ -390,11 +413,13 @@ class Inbox:
                 or CustomTemplate for custom payloads.
             filter: Optional filter configuration to only receive matching events.
             description: Optional human-readable description (max 500 chars).
+            allow_http: If True, allow HTTP URLs (insecure). Default is False.
 
         Returns:
             The created Webhook object including the signing secret.
 
         Raises:
+            ValueError: If URL is invalid or events list is empty.
             WebhookLimitReachedError: If the webhook limit for this inbox is reached.
 
         Example:
@@ -415,17 +440,22 @@ class Inbox:
             filter=filter,
             description=description,
         )
-        data = await self._api_client.create_inbox_webhook(self.email_address, options)
+        data = await self._api_client.create_inbox_webhook(
+            self.email_address, options, allow_http=allow_http
+        )
         return Webhook._from_data(data, self._api_client, self.email_address)
 
     async def list_webhooks(self) -> list[Webhook]:
         """List all webhooks for this inbox.
 
+        Webhooks are scoped to individual inboxes. This method only returns
+        webhooks created on this specific inbox.
+
         Note: The signing secret is not included in list responses.
         Use get_webhook() to retrieve a webhook with its secret.
 
         Returns:
-            List of Webhook objects.
+            List of Webhook objects scoped to this inbox.
         """
         result = await self._api_client.list_inbox_webhooks(self.email_address)
         return [

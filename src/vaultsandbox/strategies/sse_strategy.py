@@ -42,6 +42,7 @@ class SSEStrategy(DeliveryStrategy):
         """
         self._api_client = api_client
         self._config = config or SSEConfig()
+        self._lock = asyncio.Lock()  # Protects _subscriptions and _inbox_hash_map
         self._subscriptions: dict[str, Subscription] = {}
         self._inbox_hash_map: dict[str, str] = {}  # inbox_hash -> email_address
         self._sse_task: asyncio.Task[None] | None = None
@@ -71,10 +72,10 @@ class SSEStrategy(DeliveryStrategy):
         subscription = Subscription(inbox=inbox, callback=callback)
 
         # Track existing subscriptions before adding new one (for sync after reconnect)
-        existing_subscriptions = list(self._subscriptions.values())
-
-        self._subscriptions[inbox.email_address] = subscription
-        self._inbox_hash_map[inbox.inbox_hash] = inbox.email_address
+        async with self._lock:
+            existing_subscriptions = list(self._subscriptions.values())
+            self._subscriptions[inbox.email_address] = subscription
+            self._inbox_hash_map[inbox.inbox_hash] = inbox.email_address
 
         # Reconnect SSE to include new inbox and wait for connection
         await self._reconnect_sse()
@@ -85,15 +86,17 @@ class SSEStrategy(DeliveryStrategy):
                 await asyncio.wait_for(self._connected_event.wait(), timeout=5.0)
             except asyncio.TimeoutError:
                 # Clean up the failed subscription
-                del self._subscriptions[inbox.email_address]
-                del self._inbox_hash_map[inbox.inbox_hash]
+                async with self._lock:
+                    self._subscriptions.pop(inbox.email_address, None)
+                    self._inbox_hash_map.pop(inbox.inbox_hash, None)
                 raise SSEError("SSE connection timed out") from None
 
             # Check if the task failed during connection attempt
             if self._error is not None:
                 # Clean up the failed subscription
-                del self._subscriptions[inbox.email_address]
-                del self._inbox_hash_map[inbox.inbox_hash]
+                async with self._lock:
+                    self._subscriptions.pop(inbox.email_address, None)
+                    self._inbox_hash_map.pop(inbox.inbox_hash, None)
                 raise self._error
 
         # Sync existing subscriptions to catch emails during SSE disconnect window
@@ -112,16 +115,15 @@ class SSEStrategy(DeliveryStrategy):
         email_address = subscription.inbox.email_address
         inbox_hash = subscription.inbox.inbox_hash
 
-        # Remove subscription
-        if email_address in self._subscriptions:
-            del self._subscriptions[email_address]
-        if inbox_hash in self._inbox_hash_map:
-            del self._inbox_hash_map[inbox_hash]
+        # Remove subscription and get remaining subscriptions atomically
+        async with self._lock:
+            self._subscriptions.pop(email_address, None)
+            self._inbox_hash_map.pop(inbox_hash, None)
+            remaining_subscriptions = list(self._subscriptions.values())
+            has_subscriptions = bool(self._subscriptions)
 
         # Reconnect SSE without this inbox (or close if no subscriptions)
-        if self._subscriptions:
-            # Track remaining subscriptions for sync after reconnect
-            remaining_subscriptions = list(self._subscriptions.values())
+        if has_subscriptions:
             await self._reconnect_sse()
 
             # Wait for SSE connection before syncing
@@ -132,8 +134,13 @@ class SSEStrategy(DeliveryStrategy):
                     logger.debug("SSE reconnection timed out during unsubscribe")
 
             # Sync remaining subscriptions to catch emails during disconnect
+            # Sync uses HTTP API directly, so it works even if SSE connection failed
             if remaining_subscriptions:
-                await self._sync_subscriptions(remaining_subscriptions)
+                try:
+                    await self._sync_subscriptions(remaining_subscriptions)
+                except Exception as e:
+                    # Log sync failure but don't raise - unsubscribe should complete
+                    logger.debug("Failed to sync subscriptions during unsubscribe: %s", e)
         else:
             await self._close_sse()
 
@@ -141,8 +148,9 @@ class SSEStrategy(DeliveryStrategy):
         """Close the strategy and clean up resources."""
         self._running = False
         await self._close_sse()
-        self._subscriptions.clear()
-        self._inbox_hash_map.clear()
+        async with self._lock:
+            self._subscriptions.clear()
+            self._inbox_hash_map.clear()
 
     async def _close_sse(self) -> None:
         """Close the SSE connection."""
@@ -160,7 +168,10 @@ class SSEStrategy(DeliveryStrategy):
         """Reconnect the SSE connection with updated subscriptions."""
         await self._close_sse()
 
-        if not self._subscriptions:
+        async with self._lock:
+            has_subscriptions = bool(self._subscriptions)
+
+        if not has_subscriptions:
             return
 
         # Reset error state and create event to signal when connected
@@ -190,7 +201,9 @@ class SSEStrategy(DeliveryStrategy):
 
     async def _run_sse(self) -> None:
         """Run the SSE connection loop with reconnection logic."""
-        while self._running and self._subscriptions:
+        async with self._lock:
+            has_subscriptions = bool(self._subscriptions)
+        while self._running and has_subscriptions:
             try:
                 await self._connect_and_listen()
                 self._reconnect_count = 0  # Reset on successful connection
@@ -207,13 +220,21 @@ class SSEStrategy(DeliveryStrategy):
                 delay = self._config.reconnect_interval * (2 ** (self._reconnect_count - 1))
                 await asyncio.sleep(delay / 1000)
 
+            # Re-check subscriptions under lock for next iteration
+            async with self._lock:
+                has_subscriptions = bool(self._subscriptions)
+
     async def _connect_and_listen(self) -> None:
         """Connect to SSE and listen for events."""
-        if not self._subscriptions:
-            return
+        async with self._lock:
+            if not self._subscriptions:
+                return
+            # Build inbox hashes query parameter
+            inbox_hashes = ",".join(self._inbox_hash_map.keys())
 
-        # Build inbox hashes query parameter
-        inbox_hashes = ",".join(self._inbox_hash_map.keys())
+        # Close any existing client before creating new one to prevent leaks
+        if self._client is not None:
+            await self._client.aclose()
 
         # Create HTTP client for SSE
         self._client = httpx.AsyncClient(
@@ -253,13 +274,12 @@ class SSEStrategy(DeliveryStrategy):
             if not inbox_id or not email_id:
                 return
 
-            # Find the subscription for this inbox
-            email_address = self._inbox_hash_map.get(inbox_id)
-            if not email_address:
-                return
+            # Find the subscription for this inbox (under lock)
+            async with self._lock:
+                email_address = self._inbox_hash_map.get(inbox_id)
+                subscription = self._subscriptions.get(email_address) if email_address else None
 
-            subscription = self._subscriptions.get(email_address)
-            if not subscription:
+            if not subscription or not email_address:
                 return
 
             # Skip already seen emails

@@ -82,6 +82,64 @@ class TestMatchesFilter:
         assert matches_filter(email, options) is False
 
 
+class TestDecodePlainEmailResponseErrors:
+    """Tests for decode_plain_email_response error handling."""
+
+    def test_invalid_metadata_base64_raises_error(self) -> None:
+        """Test that invalid base64 in metadata raises InvalidPayloadError."""
+        from vaultsandbox.errors import InvalidPayloadError
+
+        email_response = {
+            "id": "email-123",
+            "metadata": "!!!invalid-base64!!!",
+            "parsed": "",
+        }
+
+        with pytest.raises(InvalidPayloadError, match="Failed to decode email metadata"):
+            decode_plain_email_response(email_response)
+
+    def test_invalid_metadata_json_raises_error(self) -> None:
+        """Test that invalid JSON in metadata raises InvalidPayloadError."""
+        from vaultsandbox.errors import InvalidPayloadError
+
+        # Valid base64 but invalid JSON
+        email_response = {
+            "id": "email-123",
+            "metadata": base64.b64encode(b"not valid json").decode(),
+            "parsed": "",
+        }
+
+        with pytest.raises(InvalidPayloadError, match="Failed to decode email metadata"):
+            decode_plain_email_response(email_response)
+
+    def test_invalid_parsed_base64_raises_error(self) -> None:
+        """Test that invalid base64 in parsed raises InvalidPayloadError."""
+        from vaultsandbox.errors import InvalidPayloadError
+
+        email_response = {
+            "id": "email-123",
+            "metadata": base64.b64encode(json.dumps({}).encode()).decode(),
+            "parsed": "!!!invalid-base64!!!",
+        }
+
+        with pytest.raises(InvalidPayloadError, match="Failed to decode email parsed content"):
+            decode_plain_email_response(email_response)
+
+    def test_invalid_parsed_json_raises_error(self) -> None:
+        """Test that invalid JSON in parsed raises InvalidPayloadError."""
+        from vaultsandbox.errors import InvalidPayloadError
+
+        # Valid base64 but invalid JSON
+        email_response = {
+            "id": "email-123",
+            "metadata": base64.b64encode(json.dumps({}).encode()).decode(),
+            "parsed": base64.b64encode(b"not valid json").decode(),
+        }
+
+        with pytest.raises(InvalidPayloadError, match="Failed to decode email parsed content"):
+            decode_plain_email_response(email_response)
+
+
 class TestDecodePlainEmailResponse:
     """Tests for decode_plain_email_response function."""
 
@@ -195,3 +253,79 @@ class TestDecryptEmailResponsePlain:
 
         with pytest.raises(RuntimeError, match="no keypair provided"):
             decrypt_email_response(email_response, keypair=None)
+
+
+class TestValidateEmailId:
+    """Tests for validate_email_id function."""
+
+    def test_valid_email_id(self) -> None:
+        """Test valid email IDs pass validation."""
+        from vaultsandbox.utils.validation import validate_email_id
+
+        # Should not raise for valid IDs
+        validate_email_id("abc123")
+        validate_email_id("email-id-with-hyphens")
+        validate_email_id("email_id_with_underscores")
+        validate_email_id("MixedCase123")
+        validate_email_id("a")
+
+    def test_empty_email_id_raises(self) -> None:
+        """Test empty email ID raises ValueError."""
+        from vaultsandbox.utils.validation import validate_email_id
+
+        with pytest.raises(ValueError, match="cannot be empty"):
+            validate_email_id("")
+
+    def test_invalid_email_id_raises(self) -> None:
+        """Test invalid email ID raises ValueError."""
+        from vaultsandbox.utils.validation import validate_email_id
+
+        with pytest.raises(ValueError, match="Invalid email ID format"):
+            validate_email_id("has spaces")
+
+        with pytest.raises(ValueError, match="Invalid email ID format"):
+            validate_email_id("has.dots")
+
+        with pytest.raises(ValueError, match="Invalid email ID format"):
+            validate_email_id("has@symbol")
+
+        with pytest.raises(ValueError, match="Invalid email ID format"):
+            validate_email_id("has/slash")
+
+
+class TestValidateWebhookId:
+    """Tests for validate_webhook_id function."""
+
+    def test_valid_webhook_id(self) -> None:
+        """Test valid webhook IDs pass validation."""
+        from vaultsandbox.utils.validation import validate_webhook_id
+
+        # Should not raise for valid IDs
+        validate_webhook_id("whk_abc123")
+        validate_webhook_id("whk_with-hyphen")
+        validate_webhook_id("whk_with_underscore")
+        validate_webhook_id("whk_MixedCase123")
+
+    def test_empty_webhook_id_raises(self) -> None:
+        """Test empty webhook ID raises ValueError."""
+        from vaultsandbox.utils.validation import validate_webhook_id
+
+        with pytest.raises(ValueError, match="cannot be empty"):
+            validate_webhook_id("")
+
+    def test_missing_prefix_raises(self) -> None:
+        """Test webhook ID without 'whk_' prefix raises ValueError."""
+        from vaultsandbox.utils.validation import validate_webhook_id
+
+        with pytest.raises(ValueError, match="must start with 'whk_' prefix"):
+            validate_webhook_id("abc123")
+
+        with pytest.raises(ValueError, match="must start with 'whk_' prefix"):
+            validate_webhook_id("webhook_123")
+
+    def test_invalid_webhook_id_raises(self) -> None:
+        """Test invalid webhook ID raises ValueError."""
+        from vaultsandbox.utils.validation import validate_webhook_id
+
+        with pytest.raises(ValueError, match="must start with 'whk_' prefix"):
+            validate_webhook_id("whk abc")  # Space not allowed

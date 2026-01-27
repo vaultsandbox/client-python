@@ -612,7 +612,7 @@ class TestVaultSandboxClientMonitor:
     def test_monitor_inboxes_not_initialized(self) -> None:
         """Test monitor_inboxes raises RuntimeError when not initialized."""
         client = VaultSandboxClient(api_key="test-key")
-        with pytest.raises(RuntimeError, match="Client not initialized"):
+        with pytest.raises(RuntimeError, match="Cannot monitor inboxes: client not initialized"):
             client.monitor_inboxes([])
 
     def test_monitor_inboxes_returns_monitor(self) -> None:
@@ -770,7 +770,7 @@ class TestVaultSandboxClientRuntimeChecks:
         client._ensure_initialized = AsyncMock()
         client._server_info = None
 
-        with pytest.raises(RuntimeError, match="Client not initialized"):
+        with pytest.raises(RuntimeError, match="Server info not available"):
             await client.get_server_info()
 
     @pytest.mark.asyncio
@@ -780,7 +780,7 @@ class TestVaultSandboxClientRuntimeChecks:
         client._ensure_initialized = AsyncMock()
         client._strategy = None
 
-        with pytest.raises(RuntimeError, match="Client not initialized"):
+        with pytest.raises(RuntimeError, match="Delivery strategy not initialized"):
             await client.create_inbox()
 
     @pytest.mark.asyncio
@@ -790,7 +790,9 @@ class TestVaultSandboxClientRuntimeChecks:
         client._ensure_initialized = AsyncMock()
         client._strategy = None
 
-        with pytest.raises(RuntimeError, match="Client not initialized"):
+        with pytest.raises(
+            RuntimeError, match="Cannot import inbox: delivery strategy not initialized"
+        ):
             await client.import_inbox(
                 ExportedInbox(
                     version=1,
@@ -813,7 +815,7 @@ class TestVaultSandboxClientRuntimeChecks:
         client._strategy = MagicMock()
         client._server_info = None
 
-        with pytest.raises(RuntimeError, match="Client not initialized"):
+        with pytest.raises(RuntimeError, match="Cannot import inbox: server info not available"):
             await client.import_inbox(
                 ExportedInbox(
                     version=1,

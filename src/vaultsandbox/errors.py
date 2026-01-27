@@ -141,3 +141,13 @@ class WebhookSignatureVerificationError(VaultSandboxError):
     """
 
     pass
+
+
+class InvalidTimestampError(ValueError, VaultSandboxError):
+    """Raised when timestamp format is invalid.
+
+    Inherits from ValueError for backwards compatibility with code
+    that catches ValueError from datetime parsing.
+    """
+
+    pass

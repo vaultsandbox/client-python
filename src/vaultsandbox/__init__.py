@@ -46,6 +46,7 @@ from .errors import (
     InvalidImportDataError,
     InvalidPayloadError,
     InvalidSizeError,
+    InvalidTimestampError,
     NetworkError,
     ServerKeyMismatchError,
     SignatureVerificationError,
@@ -124,7 +125,7 @@ from .utils import (
 )
 from .webhook import Webhook
 
-__version__ = "0.9.0"
+__version__ = "0.9.1"
 
 __all__ = [
     # Main classes
@@ -218,6 +219,7 @@ __all__ = [
     "EmailNotFoundError",
     "InboxAlreadyExistsError",
     "InvalidImportDataError",
+    "InvalidTimestampError",
     "DecryptionError",
     "SignatureVerificationError",
     "SSEError",

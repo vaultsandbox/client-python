@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import base64
+import binascii
+import logging
 from re import Pattern
 from typing import TYPE_CHECKING, Any
 
 from ..crypto import Keypair, decrypt_metadata, decrypt_parsed
+from ..errors import InvalidPayloadError
 from ..types import (
     Attachment,
     AuthResults,
@@ -202,13 +205,15 @@ def parse_attachments(data: list[dict[str, Any]] | None) -> list[Attachment]:
     if not data:
         return []
 
+    logger = logging.getLogger(__name__)
     attachments = []
     for item in data:
         # Decode base64 content to bytes
         content_b64 = item.get("content", "")
         try:
             content = base64.b64decode(content_b64)
-        except Exception:
+        except binascii.Error as e:
+            logger.warning(f"Failed to decode attachment base64: {e}")
             content = b""
 
         attachments.append(
@@ -235,16 +240,27 @@ def decode_plain_email_response(
 
     Returns:
         Dictionary with decoded email data.
+
+    Raises:
+        InvalidPayloadError: If base64 decoding or JSON parsing fails.
     """
     import json
 
     # Decode base64 metadata
     metadata_b64 = email_response.get("metadata", "")
-    metadata = json.loads(base64.b64decode(metadata_b64).decode("utf-8")) if metadata_b64 else {}
+    try:
+        metadata = (
+            json.loads(base64.b64decode(metadata_b64).decode("utf-8")) if metadata_b64 else {}
+        )
+    except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise InvalidPayloadError(f"Failed to decode email metadata: {e}") from e
 
     # Decode base64 parsed content
     parsed_b64 = email_response.get("parsed", "")
-    parsed = json.loads(base64.b64decode(parsed_b64).decode("utf-8")) if parsed_b64 else {}
+    try:
+        parsed = json.loads(base64.b64decode(parsed_b64).decode("utf-8")) if parsed_b64 else {}
+    except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise InvalidPayloadError(f"Failed to decode email parsed content: {e}") from e
 
     return {
         "id": email_response["id"],

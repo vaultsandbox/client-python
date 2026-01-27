@@ -967,3 +967,178 @@ class TestWaitForEmailOptionsTypes:
         )
         assert options.subject == "Test"
         assert options.timeout == 30000
+
+
+class TestWebhooks:
+    """Tests for webhook examples shown in README."""
+
+    @pytest.mark.asyncio
+    async def test_create_and_manage_webhook(
+        self,
+        api_config: dict[str, str],
+    ) -> None:
+        """Test creating and managing webhooks (inbox-scoped)."""
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            # README example: Create a webhook for an inbox
+            webhook = await inbox.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+                description="Notify when emails arrive",
+            )
+
+            assert webhook.id is not None
+            assert webhook.id.startswith("whk_")
+            assert webhook.inbox_email == inbox.email_address  # Webhook is inbox-scoped
+            assert webhook.secret is not None
+            assert webhook.secret.startswith("whsec_")
+
+            # README example: List all webhooks for an inbox
+            webhooks = await inbox.list_webhooks()
+            assert len(webhooks) >= 1
+            assert any(wh.id == webhook.id for wh in webhooks)
+            for wh in webhooks:
+                assert wh.inbox_email == inbox.email_address
+
+            # README example: Update a webhook
+            await webhook.update(enabled=False)
+            assert webhook.enabled is False
+
+            # README example: Test webhook connectivity
+            result = await webhook.test()
+            assert result is not None
+
+            # README example: Rotate signing secret
+            old_secret = webhook.secret
+            new_secret = await webhook.rotate_secret()
+            assert new_secret.secret is not None
+            assert new_secret.secret != old_secret
+
+            # README example: Delete a webhook
+            await webhook.delete()
+
+            # Verify webhook was deleted
+            webhooks_after = await inbox.list_webhooks()
+            assert not any(wh.id == webhook.id for wh in webhooks_after)
+
+            await inbox.delete()
+
+    @pytest.mark.asyncio
+    async def test_webhooks_per_inbox(
+        self,
+        api_config: dict[str, str],
+    ) -> None:
+        """Test that webhooks are scoped to individual inboxes."""
+        async with VaultSandboxClient(**api_config) as client:
+            # README example: Each inbox needs its own webhook
+            inbox1 = await client.create_inbox()
+            inbox2 = await client.create_inbox()
+
+            webhook1 = await inbox1.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+            )
+            webhook2 = await inbox2.create_webhook(
+                url="https://example.com/webhook",
+                events=["email.received"],
+            )
+
+            # Webhooks are scoped to their respective inboxes
+            assert webhook1.inbox_email == inbox1.email_address
+            assert webhook2.inbox_email == inbox2.email_address
+
+            # Each inbox only lists its own webhooks
+            inbox1_webhooks = await inbox1.list_webhooks()
+            inbox2_webhooks = await inbox2.list_webhooks()
+
+            assert any(wh.id == webhook1.id for wh in inbox1_webhooks)
+            assert not any(wh.id == webhook2.id for wh in inbox1_webhooks)
+
+            assert any(wh.id == webhook2.id for wh in inbox2_webhooks)
+            assert not any(wh.id == webhook1.id for wh in inbox2_webhooks)
+
+            await inbox1.delete()
+            await inbox2.delete()
+
+
+class TestChaosEngineering:
+    """Tests for chaos engineering examples shown in README."""
+
+    @pytest.mark.asyncio
+    async def test_chaos_latency_injection(
+        self,
+        api_config: dict[str, str],
+    ) -> None:
+        """Test enabling latency chaos injection."""
+        from vaultsandbox import LatencyConfig
+
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            # README example: Enable latency injection
+            chaos = await inbox.set_chaos(
+                enabled=True,
+                latency=LatencyConfig(
+                    enabled=True,
+                    min_delay_ms=1000,
+                    max_delay_ms=3000,
+                    probability=0.5,
+                ),
+            )
+
+            assert chaos.enabled is True
+            assert chaos.latency is not None
+            assert chaos.latency.enabled is True
+
+            # README example: Check current chaos configuration
+            chaos = await inbox.get_chaos()
+            assert chaos.enabled is True
+
+            # README example: Disable chaos when done testing
+            await inbox.disable_chaos()
+
+            chaos_after = await inbox.get_chaos()
+            assert chaos_after.enabled is False
+
+            await inbox.delete()
+
+    @pytest.mark.asyncio
+    async def test_chaos_random_errors(
+        self,
+        api_config: dict[str, str],
+    ) -> None:
+        """Test enabling random error chaos injection."""
+        from vaultsandbox import RandomErrorConfig
+
+        async with VaultSandboxClient(**api_config) as client:
+            inbox = await client.create_inbox()
+
+            # README example: Inject random temporary errors
+            chaos = await inbox.set_chaos(
+                enabled=True,
+                random_error=RandomErrorConfig(
+                    enabled=True,
+                    error_rate=0.2,
+                    error_types=["temporary"],
+                ),
+            )
+
+            assert chaos.enabled is True
+            assert chaos.random_error is not None
+            assert chaos.random_error.enabled is True
+
+            await inbox.disable_chaos()
+            await inbox.delete()
+
+
+class TestAPIReferenceWebhookMethods:
+    """Tests verifying Inbox has documented webhook methods."""
+
+    def test_inbox_has_webhook_methods(self) -> None:
+        """Test that Inbox has all documented webhook methods."""
+        # Methods from README API Reference table
+        assert hasattr(Inbox, "create_webhook")
+        assert hasattr(Inbox, "list_webhooks")
+        assert hasattr(Inbox, "get_webhook")
+        assert hasattr(Inbox, "delete_webhook")

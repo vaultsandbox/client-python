@@ -1,23 +1,24 @@
-"""HTTP API client with retry logic for VaultSandbox SDK."""
+"""HTTP API client with retry logic for VaultSandbox SDK.
+
+This module provides the main ApiClient class which composes multiple
+domain-specific API clients:
+- BaseApiClient: Common HTTP operations and server endpoints
+- InboxApiClient: Inbox CRUD operations
+- EmailApiClient: Email operations
+- WebhookApiClient: Webhook operations
+- ChaosApiClient: Chaos configuration operations
+
+For new code, consider using the domain-specific clients directly for
+better separation of concerns.
+"""
 
 from __future__ import annotations
 
-import asyncio
-import json
-import re
-from typing import Any, cast
-from urllib.parse import quote
+from typing import TYPE_CHECKING, Any
 
-import httpx
+if TYPE_CHECKING:
+    import httpx
 
-from ..errors import (
-    ApiError,
-    EmailNotFoundError,
-    InboxNotFoundError,
-    NetworkError,
-    WebhookLimitReachedError,
-    WebhookNotFoundError,
-)
 from ..types import (
     BlackholeConfig,
     ChaosConfig,
@@ -26,7 +27,6 @@ from ..types import (
     CreateWebhookOptions,
     CustomTemplate,
     EmailResponse,
-    EncryptionPolicy,
     FilterConfig,
     FilterRule,
     GreylistConfig,
@@ -45,29 +45,36 @@ from ..types import (
     WebhookStats,
 )
 
-# More robust patterns for error classification
-_INBOX_NOT_FOUND_PATTERN = re.compile(r"\binbox\b.*\b(not found|does not exist)\b", re.IGNORECASE)
-_EMAIL_NOT_FOUND_PATTERN = re.compile(r"\bemail\b.*\b(not found|does not exist)\b", re.IGNORECASE)
-_WEBHOOK_NOT_FOUND_PATTERN = re.compile(
-    r"\bwebhook\b.*\b(not found|does not exist)\b", re.IGNORECASE
-)
-_WEBHOOK_LIMIT_PATTERN = re.compile(r"\bwebhook\b.*\blimit\b", re.IGNORECASE)
+# Re-export the domain-specific clients for direct use
+from .base_client import BaseApiClient, encode_path_segment
+from .chaos_client import ChaosApiClient
+from .email_client import EmailApiClient
+from .inbox_client import InboxApiClient
+from .webhook_client import WebhookApiClient, validate_webhook_url
 
+# Backward compatibility alias
+_encode_path_segment = encode_path_segment
+_validate_webhook_url = validate_webhook_url
 
-def _encode_path_segment(value: str) -> str:
-    """URL-encode a path segment for use in API URLs.
-
-    Args:
-        value: The value to encode.
-
-    Returns:
-        URL-encoded string safe for use in URL paths.
-    """
-    return quote(value, safe="")
+__all__ = [
+    "ApiClient",
+    "BaseApiClient",
+    "ChaosApiClient",
+    "EmailApiClient",
+    "InboxApiClient",
+    "WebhookApiClient",
+    "encode_path_segment",
+    "validate_webhook_url",
+]
 
 
 class ApiClient:
     """HTTP client for VaultSandbox API with automatic retry logic.
+
+    This class provides a unified interface to all API operations by
+    composing multiple domain-specific clients. For new code, you may
+    use the individual clients (InboxApiClient, EmailApiClient, etc.)
+    directly for better modularity.
 
     Attributes:
         config: Client configuration.
@@ -80,30 +87,35 @@ class ApiClient:
             config: Client configuration with API key and settings.
         """
         self.config = config
-        self._client: httpx.AsyncClient | None = None
+
+        # Initialize domain-specific clients
+        self._base = BaseApiClient(config)
+        self._inbox = InboxApiClient(config)
+        self._email = EmailApiClient(config)
+        self._webhook = WebhookApiClient(config)
+        self._chaos = ChaosApiClient(config)
+
+        # Wire up cross-client dependencies
+        self._inbox._chaos_client = self._chaos
+
+    # Expose internal client reference for strategies that need direct HTTP client access
+    @property
+    def _client(self) -> httpx.AsyncClient | None:
+        """Access the underlying httpx client (for internal use)."""
+        return self._base._client
+
+    @_client.setter
+    def _client(self, value: httpx.AsyncClient | None) -> None:
+        """Set the underlying httpx client (for testing)."""
+        self._base._client = value
+        self._inbox._client = value
+        self._email._client = value
+        self._webhook._client = value
+        self._chaos._client = value
 
     async def _get_client(self) -> httpx.AsyncClient:
-        """Get or create the HTTP client.
-
-        Returns:
-            The HTTP client instance.
-        """
-        if self._client is None or self._client.is_closed:
-            self._client = httpx.AsyncClient(
-                base_url=self.config.base_url,
-                headers={
-                    "X-API-Key": self.config.api_key,
-                    "Content-Type": "application/json",
-                },
-                timeout=httpx.Timeout(self.config.timeout / 1000),
-            )
-        return self._client
-
-    async def close(self) -> None:
-        """Close the HTTP client."""
-        if self._client is not None and not self._client.is_closed:
-            await self._client.aclose()
-            self._client = None
+        """Get or create the HTTP client (for internal use)."""
+        return await self._base._get_client()
 
     async def _request(
         self,
@@ -113,97 +125,19 @@ class ApiClient:
         json: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
     ) -> httpx.Response:
-        """Make an HTTP request with retry logic.
+        """Make an HTTP request with retry logic (for internal use)."""
+        return await self._base._request(method, path, json=json, params=params)
 
-        Args:
-            method: HTTP method (GET, POST, DELETE, PATCH).
-            path: API path.
-            json: JSON body for the request.
-            params: Query parameters.
+    async def close(self) -> None:
+        """Close the HTTP client."""
+        # Only need to close one since they share config but have separate clients
+        await self._base.close()
+        await self._inbox.close()
+        await self._email.close()
+        await self._webhook.close()
+        await self._chaos.close()
 
-        Returns:
-            The HTTP response.
-
-        Raises:
-            ApiError: If the request fails after all retries.
-            NetworkError: If there's a network communication failure.
-            InboxNotFoundError: If the inbox is not found.
-            EmailNotFoundError: If the email is not found.
-        """
-        client = await self._get_client()
-        last_error: Exception | None = None
-
-        for attempt in range(self.config.max_retries + 1):
-            try:
-                response = await client.request(method, path, json=json, params=params)
-
-                # Check if we should retry based on status code
-                if (
-                    response.status_code in self.config.retry_on_status_codes
-                    and attempt < self.config.max_retries
-                ):
-                    delay = self.config.retry_delay * (2**attempt) / 1000
-                    await asyncio.sleep(delay)
-                    continue
-
-                # Handle errors
-                if response.status_code >= 400:
-                    self._handle_error_response(response)
-
-                return response
-
-            except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError) as e:
-                last_error = e
-                if attempt < self.config.max_retries:
-                    delay = self.config.retry_delay * (2**attempt) / 1000
-                    await asyncio.sleep(delay)
-                    continue
-                raise NetworkError(f"Network error: {e}") from e
-
-        # Should not reach here, but just in case
-        if last_error:  # pragma: no cover
-            raise NetworkError(
-                f"Request failed after {self.config.max_retries} retries"
-            ) from last_error
-        raise NetworkError(
-            f"Request failed after {self.config.max_retries} retries"
-        )  # pragma: no cover
-
-    def _handle_error_response(self, response: httpx.Response) -> None:
-        """Handle HTTP error responses.
-
-        Args:
-            response: The HTTP response.
-
-        Raises:
-            InboxNotFoundError: If the inbox is not found.
-            EmailNotFoundError: If the email is not found.
-            WebhookNotFoundError: If the webhook is not found.
-            WebhookLimitReachedError: If the webhook limit is reached.
-            ApiError: For other API errors.
-        """
-        try:
-            data = response.json()
-            message = data.get("message", data.get("error", response.text))
-        except (ValueError, json.JSONDecodeError):
-            message = response.text or f"HTTP {response.status_code}"
-
-        if response.status_code == 404:
-            if _WEBHOOK_NOT_FOUND_PATTERN.search(message):
-                raise WebhookNotFoundError(message)
-            if _INBOX_NOT_FOUND_PATTERN.search(message):
-                raise InboxNotFoundError(message)
-            if _EMAIL_NOT_FOUND_PATTERN.search(message):
-                raise EmailNotFoundError(message)
-            # Default to inbox not found for 404
-            raise InboxNotFoundError(message)
-
-        if response.status_code == 409 and _WEBHOOK_LIMIT_PATTERN.search(message):
-            raise WebhookLimitReachedError(message)
-
-        raise ApiError(response.status_code, message)
-
-    # Server endpoints
+    # Server endpoints (delegated to base client)
 
     async def check_key(self) -> bool:
         """Validate the API key.
@@ -211,9 +145,7 @@ class ApiClient:
         Returns:
             True if the API key is valid.
         """
-        response = await self._request("GET", "/api/check-key")
-        data = response.json()
-        return cast(bool, data.get("ok", False))
+        return await self._base.check_key()
 
     async def get_server_info(self) -> ServerInfo:
         """Get server information and capabilities.
@@ -221,24 +153,9 @@ class ApiClient:
         Returns:
             ServerInfo with cryptographic configuration.
         """
-        response = await self._request("GET", "/api/server-info")
-        data = response.json()
-        # Default to 'always' if not specified (backwards compatibility)
-        encryption_policy: EncryptionPolicy = data.get("encryptionPolicy", "always")
-        return ServerInfo(
-            server_sig_pk=data["serverSigPk"],
-            algs=data["algs"],
-            context=data["context"],
-            max_ttl=data["maxTtl"],
-            default_ttl=data["defaultTtl"],
-            sse_console=data.get("sseConsole", False),
-            allowed_domains=data.get("allowedDomains", []),
-            encryption_policy=encryption_policy,
-            spam_analysis_enabled=data.get("spamAnalysisEnabled", False),
-            chaos_enabled=data.get("chaosEnabled", False),
-        )
+        return await self._base.get_server_info()
 
-    # Inbox endpoints
+    # Inbox endpoints (delegated to inbox client)
 
     async def create_inbox(
         self,
@@ -266,31 +183,14 @@ class ApiClient:
         Returns:
             InboxData with the created inbox information.
         """
-        body: dict[str, Any] = {}
-        if client_kem_pk is not None:
-            body["clientKemPk"] = client_kem_pk
-        if ttl is not None:
-            body["ttl"] = ttl
-        if email_address is not None:
-            body["emailAddress"] = email_address
-        if email_auth is not None:
-            body["emailAuth"] = email_auth
-        if encryption is not None:
-            body["encryption"] = encryption
-        if spam_analysis is not None:
-            body["spamAnalysis"] = spam_analysis
-        if chaos is not None:
-            body["chaos"] = self._serialize_chaos_config(chaos)
-
-        response = await self._request("POST", "/api/inboxes", json=body)
-        data = response.json()
-        return InboxData(
-            email_address=data["emailAddress"],
-            expires_at=data["expiresAt"],
-            inbox_hash=data["inboxHash"],
-            encrypted=data.get("encrypted", True),  # Default to True for backwards compat
-            email_auth=data.get("emailAuth", False),
-            server_sig_pk=data.get("serverSigPk"),  # Optional, only present when encrypted
+        return await self._inbox.create_inbox(
+            client_kem_pk,
+            ttl=ttl,
+            email_address=email_address,
+            email_auth=email_auth,
+            encryption=encryption,
+            spam_analysis=spam_analysis,
+            chaos=chaos,
         )
 
     async def delete_inbox(self, email_address: str) -> None:
@@ -299,8 +199,7 @@ class ApiClient:
         Args:
             email_address: The email address of the inbox to delete.
         """
-        encoded = _encode_path_segment(email_address)
-        await self._request("DELETE", f"/api/inboxes/{encoded}")
+        await self._inbox.delete_inbox(email_address)
 
     async def delete_all_inboxes(self) -> int:  # pragma: no cover
         """Delete all inboxes for the API key.
@@ -311,9 +210,7 @@ class ApiClient:
         Returns:
             Number of inboxes deleted.
         """
-        response = await self._request("DELETE", "/api/inboxes")
-        data = response.json()
-        return cast(int, data.get("deleted", 0))
+        return await self._inbox.delete_all_inboxes()
 
     async def get_sync_status(self, email_address: str) -> SyncStatus:
         """Get inbox sync status.
@@ -324,15 +221,9 @@ class ApiClient:
         Returns:
             SyncStatus with email count and hash.
         """
-        encoded = _encode_path_segment(email_address)
-        response = await self._request("GET", f"/api/inboxes/{encoded}/sync")
-        data = response.json()
-        return SyncStatus(
-            email_count=data["emailCount"],
-            emails_hash=data["emailsHash"],
-        )
+        return await self._inbox.get_sync_status(email_address)
 
-    # Email endpoints
+    # Email endpoints (delegated to email client)
 
     async def list_emails(
         self, email_address: str, include_content: bool = False
@@ -346,10 +237,7 @@ class ApiClient:
         Returns:
             List of encrypted email responses.
         """
-        encoded = _encode_path_segment(email_address)
-        params = {"includeContent": "true"} if include_content else None
-        response = await self._request("GET", f"/api/inboxes/{encoded}/emails", params=params)
-        return cast(list[EmailResponse], response.json())
+        return await self._email.list_emails(email_address, include_content)
 
     async def get_email(self, email_address: str, email_id: str) -> EmailResponse:
         """Get a specific email.
@@ -361,10 +249,7 @@ class ApiClient:
         Returns:
             Encrypted email response.
         """
-        encoded_addr = _encode_path_segment(email_address)
-        encoded_id = _encode_path_segment(email_id)
-        response = await self._request("GET", f"/api/inboxes/{encoded_addr}/emails/{encoded_id}")
-        return cast(EmailResponse, response.json())
+        return await self._email.get_email(email_address, email_id)
 
     async def get_raw_email(self, email_address: str, email_id: str) -> RawEmailResponse:
         """Get raw email source.
@@ -376,12 +261,7 @@ class ApiClient:
         Returns:
             Raw email response with encrypted content.
         """
-        encoded_addr = _encode_path_segment(email_address)
-        encoded_id = _encode_path_segment(email_id)
-        response = await self._request(
-            "GET", f"/api/inboxes/{encoded_addr}/emails/{encoded_id}/raw"
-        )
-        return cast(RawEmailResponse, response.json())
+        return await self._email.get_raw_email(email_address, email_id)
 
     async def mark_email_as_read(self, email_address: str, email_id: str) -> None:
         """Mark an email as read.
@@ -390,9 +270,7 @@ class ApiClient:
             email_address: The email address of the inbox.
             email_id: The email ID.
         """
-        encoded_addr = _encode_path_segment(email_address)
-        encoded_id = _encode_path_segment(email_id)
-        await self._request("PATCH", f"/api/inboxes/{encoded_addr}/emails/{encoded_id}/read")
+        await self._email.mark_email_as_read(email_address, email_id)
 
     async def delete_email(self, email_address: str, email_id: str) -> None:
         """Delete an email.
@@ -401,135 +279,62 @@ class ApiClient:
             email_address: The email address of the inbox.
             email_id: The email ID.
         """
-        encoded_addr = _encode_path_segment(email_address)
-        encoded_id = _encode_path_segment(email_id)
-        await self._request("DELETE", f"/api/inboxes/{encoded_addr}/emails/{encoded_id}")
+        await self._email.delete_email(email_address, email_id)
 
-    # Inbox webhook endpoints
+    # Webhook endpoints (delegated to webhook client)
 
+    # Expose serialization/parsing methods for backward compatibility
     def _serialize_filter_rule(self, rule: FilterRule) -> dict[str, Any]:
         """Serialize a FilterRule to API format."""
-        result: dict[str, Any] = {
-            "field": rule.field,
-            "operator": rule.operator,
-            "value": rule.value,
-        }
-        if rule.case_sensitive:
-            result["caseSensitive"] = True
-        return result
+        return self._webhook._serialize_filter_rule(rule)
 
     def _serialize_filter_config(self, filter_config: FilterConfig) -> dict[str, Any]:
         """Serialize a FilterConfig to API format."""
-        result: dict[str, Any] = {
-            "rules": [self._serialize_filter_rule(r) for r in filter_config.rules],
-            "mode": filter_config.mode,
-        }
-        if filter_config.require_auth:
-            result["requireAuth"] = True
-        return result
+        return self._webhook._serialize_filter_config(filter_config)
 
     def _serialize_template(self, template: str | CustomTemplate) -> str | dict[str, Any]:
         """Serialize a template to API format."""
-        if isinstance(template, str):
-            return template
-        # CustomTemplate
-        result: dict[str, Any] = {
-            "type": "custom",
-            "body": template.body,
-        }
-        if template.content_type:
-            result["contentType"] = template.content_type
-        return result
+        return self._webhook._serialize_template(template)
 
     def _parse_filter_config(self, data: dict[str, Any]) -> FilterConfig:
         """Parse filter config from API response."""
-        rules = [
-            FilterRule(
-                field=r["field"],
-                operator=r["operator"],
-                value=r["value"],
-                case_sensitive=r.get("caseSensitive", False),
-            )
-            for r in data.get("rules", [])
-        ]
-        return FilterConfig(
-            rules=rules,
-            mode=data["mode"],
-            require_auth=data.get("requireAuth", False),
-        )
+        return self._webhook._parse_filter_config(data)
 
     def _parse_template(self, data: Any) -> str | CustomTemplate | None:
         """Parse template from API response."""
-        if data is None:
-            return None
-        if isinstance(data, str):
-            return data
-        if isinstance(data, dict) and data.get("type") == "custom":
-            return CustomTemplate(
-                body=data["body"],
-                content_type=data.get("contentType"),
-            )
-        return None
+        return self._webhook._parse_template(data)
 
     def _parse_webhook_stats(self, data: dict[str, Any] | None) -> WebhookStats | None:
         """Parse webhook stats from API response."""
-        if data is None:
-            return None
-        return WebhookStats(
-            total_deliveries=data["totalDeliveries"],
-            successful_deliveries=data["successfulDeliveries"],
-            failed_deliveries=data["failedDeliveries"],
-        )
+        return self._webhook._parse_webhook_stats(data)
 
     def _parse_webhook_data(self, data: dict[str, Any]) -> WebhookData:
         """Parse WebhookData from API response."""
-        return WebhookData(
-            id=data["id"],
-            url=data["url"],
-            events=data["events"],
-            scope=data["scope"],
-            enabled=data["enabled"],
-            created_at=data["createdAt"],
-            inbox_email=data.get("inboxEmail"),
-            inbox_hash=data.get("inboxHash"),
-            secret=data.get("secret"),
-            template=self._parse_template(data.get("template")),
-            filter=self._parse_filter_config(data["filter"]) if data.get("filter") else None,
-            description=data.get("description"),
-            updated_at=data.get("updatedAt"),
-            last_delivery_at=data.get("lastDeliveryAt"),
-            last_delivery_status=data.get("lastDeliveryStatus"),
-            stats=self._parse_webhook_stats(data.get("stats")),
-        )
+        return self._webhook._parse_webhook_data(data)
 
     async def create_inbox_webhook(
         self,
         email_address: str,
         options: CreateWebhookOptions,
+        *,
+        allow_http: bool = False,
     ) -> WebhookData:
         """Create a webhook for an inbox.
 
         Args:
             email_address: The email address of the inbox.
             options: Webhook creation options.
+            allow_http: If True, allow HTTP URLs. Default is False (HTTPS only).
 
         Returns:
             WebhookData with the created webhook information including secret.
-        """
-        encoded = _encode_path_segment(email_address)
-        body: dict[str, Any] = {
-            "url": options.url,
-            "events": options.events,
-        }
-        if options.template is not None:
-            body["template"] = self._serialize_template(options.template)
-        if options.filter is not None:
-            body["filter"] = self._serialize_filter_config(options.filter)
-        if options.description is not None:
-            body["description"] = options.description
 
-        response = await self._request("POST", f"/api/inboxes/{encoded}/webhooks", json=body)
-        return self._parse_webhook_data(response.json())
+        Raises:
+            ValueError: If webhook URL is invalid or events list is empty.
+        """
+        return await self._webhook.create_inbox_webhook(
+            email_address, options, allow_http=allow_http
+        )
 
     async def list_inbox_webhooks(self, email_address: str) -> WebhookListData:
         """List all webhooks for an inbox.
@@ -540,13 +345,7 @@ class ApiClient:
         Returns:
             WebhookListData with list of webhooks and total count.
         """
-        encoded = _encode_path_segment(email_address)
-        response = await self._request("GET", f"/api/inboxes/{encoded}/webhooks")
-        data = response.json()
-        return WebhookListData(
-            webhooks=[self._parse_webhook_data(w) for w in data["webhooks"]],
-            total=data["total"],
-        )
+        return await self._webhook.list_inbox_webhooks(email_address)
 
     async def get_inbox_webhook(self, email_address: str, webhook_id: str) -> WebhookData:
         """Get a specific webhook for an inbox.
@@ -558,16 +357,15 @@ class ApiClient:
         Returns:
             WebhookData with webhook information including secret and stats.
         """
-        encoded_addr = _encode_path_segment(email_address)
-        encoded_id = _encode_path_segment(webhook_id)
-        response = await self._request("GET", f"/api/inboxes/{encoded_addr}/webhooks/{encoded_id}")
-        return self._parse_webhook_data(response.json())
+        return await self._webhook.get_inbox_webhook(email_address, webhook_id)
 
     async def update_inbox_webhook(
         self,
         email_address: str,
         webhook_id: str,
         options: UpdateWebhookOptions,
+        *,
+        allow_http: bool = False,
     ) -> WebhookData:
         """Update a webhook for an inbox.
 
@@ -575,35 +373,17 @@ class ApiClient:
             email_address: The email address of the inbox.
             webhook_id: The webhook ID.
             options: Update options.
+            allow_http: If True, allow HTTP URLs. Default is False (HTTPS only).
 
         Returns:
             WebhookData with updated webhook information.
+
+        Raises:
+            ValueError: If webhook URL is invalid.
         """
-        encoded_addr = _encode_path_segment(email_address)
-        encoded_id = _encode_path_segment(webhook_id)
-        body: dict[str, Any] = {}
-
-        if options.url is not None:
-            body["url"] = options.url
-        if options.events is not None:
-            body["events"] = options.events
-        if options._remove_template:
-            body["template"] = None
-        elif options.template is not None:
-            body["template"] = self._serialize_template(options.template)
-        if options._remove_filter:
-            body["filter"] = None
-        elif options.filter is not None:
-            body["filter"] = self._serialize_filter_config(options.filter)
-        if options.description is not None:
-            body["description"] = options.description
-        if options.enabled is not None:
-            body["enabled"] = options.enabled
-
-        response = await self._request(
-            "PATCH", f"/api/inboxes/{encoded_addr}/webhooks/{encoded_id}", json=body
+        return await self._webhook.update_inbox_webhook(
+            email_address, webhook_id, options, allow_http=allow_http
         )
-        return self._parse_webhook_data(response.json())
 
     async def delete_inbox_webhook(self, email_address: str, webhook_id: str) -> None:
         """Delete a webhook for an inbox.
@@ -612,9 +392,7 @@ class ApiClient:
             email_address: The email address of the inbox.
             webhook_id: The webhook ID.
         """
-        encoded_addr = _encode_path_segment(email_address)
-        encoded_id = _encode_path_segment(webhook_id)
-        await self._request("DELETE", f"/api/inboxes/{encoded_addr}/webhooks/{encoded_id}")
+        await self._webhook.delete_inbox_webhook(email_address, webhook_id)
 
     async def test_inbox_webhook(self, email_address: str, webhook_id: str) -> TestWebhookResult:
         """Test a webhook for an inbox by sending a test event.
@@ -626,20 +404,7 @@ class ApiClient:
         Returns:
             TestWebhookResult with test results.
         """
-        encoded_addr = _encode_path_segment(email_address)
-        encoded_id = _encode_path_segment(webhook_id)
-        response = await self._request(
-            "POST", f"/api/inboxes/{encoded_addr}/webhooks/{encoded_id}/test"
-        )
-        data = response.json()
-        return TestWebhookResult(
-            success=data["success"],
-            status_code=data.get("statusCode"),
-            response_time=data.get("responseTime"),
-            response_body=data.get("responseBody"),
-            error=data.get("error"),
-            payload_sent=data.get("payloadSent"),
-        )
+        return await self._webhook.test_inbox_webhook(email_address, webhook_id)
 
     async def rotate_inbox_webhook_secret(
         self, email_address: str, webhook_id: str
@@ -653,149 +418,58 @@ class ApiClient:
         Returns:
             RotateSecretResult with new secret and grace period info.
         """
-        encoded_addr = _encode_path_segment(email_address)
-        encoded_id = _encode_path_segment(webhook_id)
-        response = await self._request(
-            "POST", f"/api/inboxes/{encoded_addr}/webhooks/{encoded_id}/rotate-secret"
-        )
-        data = response.json()
-        return RotateSecretResult(
-            id=data["id"],
-            secret=data["secret"],
-            previous_secret_valid_until=data["previousSecretValidUntil"],
-        )
+        return await self._webhook.rotate_inbox_webhook_secret(email_address, webhook_id)
 
-    # Chaos configuration endpoints
+    # Chaos configuration endpoints (delegated to chaos client)
 
+    # Expose serialization/parsing methods for backward compatibility
     def _serialize_latency_config(self, config: LatencyConfig) -> dict[str, Any]:
         """Serialize a LatencyConfig to API format."""
-        result: dict[str, Any] = {"enabled": config.enabled}
-        if config.min_delay_ms is not None:
-            result["minDelayMs"] = config.min_delay_ms
-        if config.max_delay_ms is not None:
-            result["maxDelayMs"] = config.max_delay_ms
-        if config.jitter is not None:
-            result["jitter"] = config.jitter
-        if config.probability is not None:
-            result["probability"] = config.probability
-        return result
+        return self._chaos._serialize_latency_config(config)
 
     def _serialize_connection_drop_config(self, config: ConnectionDropConfig) -> dict[str, Any]:
         """Serialize a ConnectionDropConfig to API format."""
-        result: dict[str, Any] = {"enabled": config.enabled}
-        if config.probability is not None:
-            result["probability"] = config.probability
-        if config.graceful is not None:
-            result["graceful"] = config.graceful
-        return result
+        return self._chaos._serialize_connection_drop_config(config)
 
     def _serialize_random_error_config(self, config: RandomErrorConfig) -> dict[str, Any]:
         """Serialize a RandomErrorConfig to API format."""
-        result: dict[str, Any] = {"enabled": config.enabled}
-        if config.error_rate is not None:
-            result["errorRate"] = config.error_rate
-        if config.error_types is not None:
-            result["errorTypes"] = config.error_types
-        return result
+        return self._chaos._serialize_random_error_config(config)
 
     def _serialize_greylist_config(self, config: GreylistConfig) -> dict[str, Any]:
         """Serialize a GreylistConfig to API format."""
-        result: dict[str, Any] = {"enabled": config.enabled}
-        if config.retry_window_ms is not None:
-            result["retryWindowMs"] = config.retry_window_ms
-        if config.max_attempts is not None:
-            result["maxAttempts"] = config.max_attempts
-        if config.track_by is not None:
-            result["trackBy"] = config.track_by
-        return result
+        return self._chaos._serialize_greylist_config(config)
 
     def _serialize_blackhole_config(self, config: BlackholeConfig) -> dict[str, Any]:
         """Serialize a BlackholeConfig to API format."""
-        result: dict[str, Any] = {"enabled": config.enabled}
-        if config.trigger_webhooks is not None:
-            result["triggerWebhooks"] = config.trigger_webhooks
-        return result
+        return self._chaos._serialize_blackhole_config(config)
 
     def _serialize_chaos_config(self, config: ChaosConfig) -> dict[str, Any]:
         """Serialize a ChaosConfig to API format."""
-        result: dict[str, Any] = {"enabled": config.enabled}
-        if config.expires_at is not None:
-            result["expiresAt"] = config.expires_at
-        if config.latency is not None:
-            result["latency"] = self._serialize_latency_config(config.latency)
-        if config.connection_drop is not None:
-            result["connectionDrop"] = self._serialize_connection_drop_config(
-                config.connection_drop
-            )
-        if config.random_error is not None:
-            result["randomError"] = self._serialize_random_error_config(config.random_error)
-        if config.greylist is not None:
-            result["greylist"] = self._serialize_greylist_config(config.greylist)
-        if config.blackhole is not None:
-            result["blackhole"] = self._serialize_blackhole_config(config.blackhole)
-        return result
+        return self._chaos._serialize_chaos_config(config)
 
     def _parse_latency_config(self, data: dict[str, Any]) -> LatencyConfig:
         """Parse LatencyConfig from API response."""
-        return LatencyConfig(
-            enabled=data["enabled"],
-            min_delay_ms=data.get("minDelayMs"),
-            max_delay_ms=data.get("maxDelayMs"),
-            jitter=data.get("jitter"),
-            probability=data.get("probability"),
-        )
+        return self._chaos._parse_latency_config(data)
 
     def _parse_connection_drop_config(self, data: dict[str, Any]) -> ConnectionDropConfig:
         """Parse ConnectionDropConfig from API response."""
-        return ConnectionDropConfig(
-            enabled=data["enabled"],
-            probability=data.get("probability"),
-            graceful=data.get("graceful"),
-        )
+        return self._chaos._parse_connection_drop_config(data)
 
     def _parse_random_error_config(self, data: dict[str, Any]) -> RandomErrorConfig:
         """Parse RandomErrorConfig from API response."""
-        return RandomErrorConfig(
-            enabled=data["enabled"],
-            error_rate=data.get("errorRate"),
-            error_types=data.get("errorTypes"),
-        )
+        return self._chaos._parse_random_error_config(data)
 
     def _parse_greylist_config(self, data: dict[str, Any]) -> GreylistConfig:
         """Parse GreylistConfig from API response."""
-        return GreylistConfig(
-            enabled=data["enabled"],
-            retry_window_ms=data.get("retryWindowMs"),
-            max_attempts=data.get("maxAttempts"),
-            track_by=data.get("trackBy"),
-        )
+        return self._chaos._parse_greylist_config(data)
 
     def _parse_blackhole_config(self, data: dict[str, Any]) -> BlackholeConfig:
         """Parse BlackholeConfig from API response."""
-        return BlackholeConfig(
-            enabled=data["enabled"],
-            trigger_webhooks=data.get("triggerWebhooks"),
-        )
+        return self._chaos._parse_blackhole_config(data)
 
     def _parse_chaos_config(self, data: dict[str, Any]) -> ChaosConfig:
         """Parse ChaosConfig from API response."""
-        return ChaosConfig(
-            enabled=data["enabled"],
-            expires_at=data.get("expiresAt"),
-            latency=self._parse_latency_config(data["latency"]) if data.get("latency") else None,
-            connection_drop=self._parse_connection_drop_config(data["connectionDrop"])
-            if data.get("connectionDrop")
-            else None,
-            random_error=self._parse_random_error_config(data["randomError"])
-            if data.get("randomError")
-            else None,
-            greylist=self._parse_greylist_config(data["greylist"])
-            if data.get("greylist")
-            else None,
-            blackhole=self._parse_blackhole_config(data["blackhole"])
-            if data.get("blackhole")
-            else None,
-        )
+        return self._chaos._parse_chaos_config(data)
 
     async def get_inbox_chaos(self, email_address: str) -> ChaosConfig:
         """Get the chaos configuration for an inbox.
@@ -810,9 +484,7 @@ class ApiClient:
             ApiError: If chaos is disabled globally (403) or other API errors.
             InboxNotFoundError: If the inbox is not found.
         """
-        encoded = _encode_path_segment(email_address)
-        response = await self._request("GET", f"/api/inboxes/{encoded}/chaos")
-        return self._parse_chaos_config(response.json())
+        return await self._chaos.get_inbox_chaos(email_address)
 
     async def set_inbox_chaos(self, email_address: str, config: ChaosConfig) -> ChaosConfig:
         """Set the chaos configuration for an inbox.
@@ -828,10 +500,7 @@ class ApiClient:
             ApiError: If chaos is disabled globally (403) or validation fails (400).
             InboxNotFoundError: If the inbox is not found.
         """
-        encoded = _encode_path_segment(email_address)
-        body = self._serialize_chaos_config(config)
-        response = await self._request("POST", f"/api/inboxes/{encoded}/chaos", json=body)
-        return self._parse_chaos_config(response.json())
+        return await self._chaos.set_inbox_chaos(email_address, config)
 
     async def disable_inbox_chaos(self, email_address: str) -> None:
         """Disable all chaos for an inbox.
@@ -843,5 +512,4 @@ class ApiClient:
             ApiError: If chaos is disabled globally (403) or other API errors.
             InboxNotFoundError: If the inbox is not found.
         """
-        encoded = _encode_path_segment(email_address)
-        await self._request("DELETE", f"/api/inboxes/{encoded}/chaos")
+        await self._chaos.disable_inbox_chaos(email_address)

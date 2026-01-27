@@ -13,36 +13,15 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 [![Python](https://img.shields.io/badge/python-%3E%3D3.10-brightgreen.svg)](https://www.python.org/)
 
-**Production-like email testing. Self-hosted & secure.**
+**Production-like email testing. Self-hosted and secure.**
 
-The official Python SDK for [VaultSandbox Gateway](https://github.com/vaultsandbox/gateway) — a secure, receive-only SMTP server for QA/testing environments. This SDK abstracts encryption complexity, making email testing workflows transparent and effortless.
+The official Python SDK for [VaultSandbox Gateway](https://github.com/vaultsandbox/gateway) — a self-hosted SMTP testing platform that replicates real-world email delivery with TLS, authentication, spam analysis, chaos engineering, and zero-knowledge encryption.
 
-Stop mocking your email stack. If your app sends real emails in production, it must send real emails in testing. VaultSandbox provides isolated inboxes that behave exactly like production without exposing a single byte of customer data.
+Stop mocking. Test email like production.
+
+**[See full feature list →](https://github.com/vaultsandbox/gateway)**
 
 > **Python 3.10+** required.
-
-## Why VaultSandbox?
-
-| Feature             | Simple Mocks     | Public SaaS  | **VaultSandbox**    |
-| :------------------ | :--------------- | :----------- | :------------------ |
-| **TLS/SSL**         | Ignored/Disabled | Partial      | **Real ACME certs** |
-| **Data Privacy**    | Local only       | Shared cloud | **Private VPC**     |
-| **Inbound Mail**    | Outbound only    | Yes          | **Real MX**         |
-| **Auth (SPF/DKIM)** | None             | Limited      | **Full Validation** |
-| **Crypto**          | Plaintext        | Varies       | **Zero-Knowledge**  |
-
-## Features
-
-- **Quantum-Safe Encryption** — Automatic ML-KEM-768 (Kyber768) key encapsulation + AES-256-GCM encryption
-- **Zero Crypto Knowledge Required** — All cryptographic operations are invisible to the user
-- **Real-Time Email Delivery** — SSE-based delivery with polling alternative
-- **Built for CI/CD** — Deterministic tests without sleeps, polling, or flakiness
-- **Full Email Access** — Decrypt and access email content, headers, links, and attachments
-- **Email Authentication** — Built-in SPF/DKIM/DMARC validation helpers
-- **Type-Safe** — Full type hints with `py.typed` marker for IDE support
-- **[Spam Analysis](https://vaultsandbox.dev/client-python/concepts/spam-analysis/)** — Rspamd integration for spam scores, classifications, and rule analysis
-- **[Webhooks](https://vaultsandbox.dev/client-python/guides/webhooks/)** — Global and per-inbox HTTP callbacks for email events with filtering and templates
-- **[Chaos Engineering](https://vaultsandbox.dev/client-python/guides/chaos/)** — Per-inbox SMTP failure simulation (latency, drops, errors, greylisting, blackhole)
 
 ## Installation
 
@@ -201,6 +180,110 @@ await monitor.start()
 await monitor.unsubscribe()
 ```
 
+### Webhooks
+
+Webhooks provide HTTP-based push notifications when events occur in an inbox. Each webhook is **scoped to a single inbox** and only receives events for that inbox.
+
+```python
+# Create a webhook for an inbox
+webhook = await inbox.create_webhook(
+    url="https://example.com/webhook",
+    events=["email.received"],
+    description="Notify when emails arrive"
+)
+
+print(f"Webhook ID: {webhook.id}")
+print(f"Inbox: {webhook.inbox_email}")  # The inbox this webhook belongs to
+print(f"Secret: {webhook.secret}")       # Save this for signature verification!
+
+# List all webhooks for an inbox
+webhooks = await inbox.list_webhooks()
+for wh in webhooks:
+    print(f"{wh.id}: {wh.url} (inbox: {wh.inbox_email})")
+
+# Update a webhook
+await webhook.update(enabled=False)
+
+# Test webhook connectivity
+result = await webhook.test()
+print(f"Test delivery: {result.status}")
+
+# Rotate signing secret (old secret valid for 1 hour)
+new_secret = await webhook.rotate_secret()
+print(f"New secret: {new_secret.secret}")
+
+# Delete a webhook
+await webhook.delete()
+```
+
+To receive notifications for multiple inboxes, create a webhook on each inbox:
+
+```python
+inbox1 = await client.create_inbox()
+inbox2 = await client.create_inbox()
+
+# Each inbox needs its own webhook
+webhook1 = await inbox1.create_webhook(url="https://example.com/webhook", events=["email.received"])
+webhook2 = await inbox2.create_webhook(url="https://example.com/webhook", events=["email.received"])
+```
+
+#### Verifying Webhook Signatures
+
+Use the `verify_webhook_signature` utility to validate incoming webhook payloads:
+
+```python
+from vaultsandbox import verify_webhook_signature
+
+# In your webhook handler
+def handle_webhook(request):
+    raw_body = request.body
+    signature = request.headers.get("X-VaultSandbox-Signature")
+    timestamp = request.headers.get("X-VaultSandbox-Timestamp")
+
+    if verify_webhook_signature(raw_body, signature, timestamp, webhook.secret):
+        # Process the webhook payload
+        pass
+    else:
+        # Reject invalid signature
+        pass
+```
+
+### Chaos Engineering
+
+Test your application's resilience by injecting failures and delays into email delivery:
+
+```python
+from vaultsandbox import LatencyConfig, RandomErrorConfig
+
+# Enable latency injection (50% of emails delayed 1-3 seconds)
+await inbox.set_chaos(
+    enabled=True,
+    latency=LatencyConfig(
+        enabled=True,
+        min_delay_ms=1000,
+        max_delay_ms=3000,
+        probability=0.5,
+    ),
+)
+
+# Or inject random temporary errors (20% failure rate)
+await inbox.set_chaos(
+    enabled=True,
+    random_error=RandomErrorConfig(
+        enabled=True,
+        error_rate=0.2,
+        error_types=["temporary"],
+    ),
+)
+
+# Check current chaos configuration
+chaos = await inbox.get_chaos()
+print(f"Chaos enabled: {chaos.enabled}")
+
+# Disable chaos when done testing
+await inbox.disable_chaos()
+```
+
 ### Email Content and Attachments
 
 ```python
@@ -352,6 +435,10 @@ Represents a single email inbox.
 | `delete()` | Delete inbox |
 | `get_sync_status()` | Get email count and hash |
 | `export()` | Export inbox data |
+| `create_webhook(url, events, ...)` | Create a webhook (scoped to this inbox) |
+| `list_webhooks()` | List webhooks for this inbox |
+| `get_webhook(id)` | Get specific webhook |
+| `delete_webhook(id)` | Delete a webhook |
 
 ### Email
 
@@ -381,6 +468,36 @@ Represents a decrypted email.
 | `mark_as_read()` | Mark as read |
 | `delete()` | Delete email |
 | `get_raw()` | Get raw MIME source (returns `RawEmail`) |
+
+### Webhook
+
+Represents a webhook subscription. Webhooks are always scoped to a single inbox.
+
+#### Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | `str` | Webhook ID (whk_ prefix) |
+| `url` | `str` | Target URL for deliveries |
+| `events` | `list[str]` | Subscribed event types |
+| `inbox_email` | `str` | Email address of the inbox this webhook is scoped to |
+| `enabled` | `bool` | Whether the webhook is active |
+| `secret` | `str \| None` | Signing secret (whsec_ prefix) |
+| `created_at` | `datetime` | When the webhook was created |
+| `description` | `str \| None` | Human-readable description |
+| `stats` | `WebhookStats \| None` | Delivery statistics |
+
+#### Methods
+
+| Method | Description |
+|--------|-------------|
+| `update(...)` | Update webhook configuration |
+| `delete()` | Delete this webhook |
+| `test()` | Send a test event |
+| `rotate_secret()` | Generate new signing secret |
+| `enable()` | Enable the webhook |
+| `disable()` | Disable the webhook |
+| `refresh()` | Refresh data from server |
 
 ### AuthResults
 

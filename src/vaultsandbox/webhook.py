@@ -17,7 +17,7 @@ from .types import (
     WebhookScope,
     WebhookStats,
 )
-from .utils import parse_iso_timestamp
+from .utils import parse_iso_timestamp, validate_webhook_id
 
 if TYPE_CHECKING:
     from .http import ApiClient
@@ -27,17 +27,21 @@ if TYPE_CHECKING:
 class Webhook:
     """Represents a VaultSandbox webhook.
 
-    Webhooks allow you to receive real-time notifications when events occur
+    Webhooks are scoped to individual inboxes. Each webhook only receives events
+    for the specific inbox it was created on. The `inbox_email` property always
+    contains the email address of the inbox this webhook belongs to.
+
+    Webhooks allow you to receive real-time HTTP notifications when events occur
     in an inbox, such as new emails arriving.
 
     Attributes:
         id: Webhook ID (whk_ prefix).
         url: Target URL for webhook deliveries.
         events: Event types the webhook is subscribed to.
-        scope: 'global' or 'inbox'.
+        scope: 'global' or 'inbox' (always 'inbox' for SDK-created webhooks).
         enabled: Whether the webhook is active.
         created_at: When the webhook was created.
-        inbox_email: Inbox email (inbox webhooks only).
+        inbox_email: Email address of the inbox this webhook is scoped to.
         inbox_hash: Inbox hash (inbox webhooks only).
         secret: Signing secret for verifying payloads (whsec_ prefix).
         template: Payload template configuration.
@@ -94,7 +98,8 @@ class Webhook:
             created_at=parse_iso_timestamp(data.created_at),
             _api_client=api_client,
             _inbox_email=inbox_email,
-            inbox_email=data.inbox_email,
+            # Always expose the inbox email - use API response or fall back to parent
+            inbox_email=data.inbox_email or inbox_email,
             inbox_hash=data.inbox_hash,
             secret=data.secret,
             template=data.template,
@@ -141,6 +146,7 @@ class Webhook:
         remove_filter: bool = False,
         description: str | None = None,
         enabled: bool | None = None,
+        allow_http: bool = False,
     ) -> None:
         """Update the webhook configuration.
 
@@ -153,6 +159,10 @@ class Webhook:
             remove_filter: Set True to remove the filter.
             description: New description.
             enabled: Enable/disable the webhook.
+            allow_http: If True, allow HTTP URLs (insecure). Default is False.
+
+        Raises:
+            ValueError: If the new URL is invalid.
         """
         options = UpdateWebhookOptions(
             url=url,
@@ -164,7 +174,9 @@ class Webhook:
             _remove_template=remove_template,
             _remove_filter=remove_filter,
         )
-        data = await self._api_client.update_inbox_webhook(self._inbox_email, self.id, options)
+        data = await self._api_client.update_inbox_webhook(
+            self._inbox_email, self.id, options, allow_http=allow_http
+        )
         self._update_from_data(data)
 
     async def delete(self) -> None:
@@ -187,7 +199,11 @@ class Webhook:
 
         Returns:
             RotateSecretResult with the new secret and grace period info.
+
+        Raises:
+            ValueError: If the webhook ID format is invalid.
         """
+        validate_webhook_id(self.id)
         result = await self._api_client.rotate_inbox_webhook_secret(self._inbox_email, self.id)
         self.secret = result.secret
         return result

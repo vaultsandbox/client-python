@@ -16,7 +16,7 @@ def verify_webhook_signature(
     timestamp: str,
     secret: str,
     *,
-    tolerance_seconds: int = 300,
+    tolerance_seconds: int = 60,
 ) -> bool:
     """Verify a webhook payload signature.
 
@@ -32,7 +32,9 @@ def verify_webhook_signature(
         signature: The X-Vault-Signature header value (format: "sha256=<hex>").
         timestamp: The X-Vault-Timestamp header value (Unix timestamp).
         secret: The webhook signing secret (whsec_ prefix).
-        tolerance_seconds: Maximum age of the timestamp in seconds (default: 300).
+        tolerance_seconds: Maximum age of the timestamp in seconds (default: 60).
+            Lower values are more secure against replay attacks but may cause
+            issues with clock drift. Values above 120 are not recommended.
             Set to 0 to disable timestamp validation.
 
     Returns:
@@ -71,7 +73,12 @@ def verify_webhook_signature(
 
     # Convert bytes to string if needed
     if isinstance(raw_body, bytes):
-        raw_body = raw_body.decode("utf-8")
+        try:
+            raw_body = raw_body.decode("utf-8")
+        except UnicodeDecodeError:
+            raise WebhookSignatureVerificationError(
+                "Invalid UTF-8 encoding in request body"
+            ) from None
 
     # Validate timestamp to prevent replay attacks
     if tolerance_seconds > 0:
@@ -106,12 +113,14 @@ def verify_webhook_signature(
     return True
 
 
-def is_timestamp_valid(timestamp: str, tolerance_seconds: int = 300) -> bool:
+def is_timestamp_valid(timestamp: str, tolerance_seconds: int = 60) -> bool:
     """Check if a webhook timestamp is within the tolerance window.
 
     Args:
         timestamp: Unix timestamp as string.
-        tolerance_seconds: Maximum age in seconds (default: 300 = 5 minutes).
+        tolerance_seconds: Maximum age in seconds (default: 60).
+            Lower values are more secure against replay attacks but may cause
+            issues with clock drift. Values above 120 are not recommended.
 
     Returns:
         True if the timestamp is within tolerance, False otherwise.

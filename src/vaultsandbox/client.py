@@ -285,7 +285,10 @@ class VaultSandboxClient:
         """
         await self._ensure_initialized()
         if self._server_info is None:
-            raise RuntimeError("Client not initialized. Call create_inbox first.")
+            raise RuntimeError(
+                "Server info not available. "
+                "Use the async context manager: 'async with VaultSandboxClient(...) as client:'"
+            )
         return self._server_info
 
     def _should_encrypt_inbox(self, encryption_option: str | None) -> bool:
@@ -326,7 +329,10 @@ class VaultSandboxClient:
         """
         await self._ensure_initialized()
         if self._strategy is None:
-            raise RuntimeError("Client not initialized. Call create_inbox first.")
+            raise RuntimeError(
+                "Delivery strategy not initialized. "
+                "Use the async context manager: 'async with VaultSandboxClient(...) as client:'"
+            )
 
         options = options or CreateInboxOptions()
 
@@ -406,7 +412,11 @@ class VaultSandboxClient:
             An InboxMonitor instance.
         """
         if self._strategy is None:
-            raise RuntimeError("Client not initialized. Call create_inbox first.")
+            raise RuntimeError(
+                "Cannot monitor inboxes: client not initialized. "
+                "Call create_inbox() first to initialize the delivery strategy, "
+                "or use the async context manager: 'async with VaultSandboxClient(...) as client:'"
+            )
         return InboxMonitor(inboxes, self._strategy)
 
     def export_inbox(self, inbox_or_email: Inbox | str) -> ExportedInbox:
@@ -486,9 +496,15 @@ class VaultSandboxClient:
         """
         await self._ensure_initialized()
         if self._strategy is None:
-            raise RuntimeError("Client not initialized. Call create_inbox first.")
+            raise RuntimeError(
+                "Cannot import inbox: delivery strategy not initialized. "
+                "Use the async context manager: 'async with VaultSandboxClient(...) as client:'"
+            )
         if self._server_info is None:
-            raise RuntimeError("Client not initialized. Call create_inbox first.")
+            raise RuntimeError(
+                "Cannot import inbox: server info not available. "
+                "Use the async context manager: 'async with VaultSandboxClient(...) as client:'"
+            )
 
         # Validate import data per Section 10.1
         self._validate_import_data(data)
