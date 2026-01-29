@@ -789,10 +789,12 @@ class TestInboxWaitForEmail:
         mock_strategy = MagicMock()
         mock_subscription = MagicMock()
         captured_callback = None
+        callback_captured = asyncio.Event()
 
         async def capture_subscribe(inbox, callback):
             nonlocal captured_callback
             captured_callback = callback
+            callback_captured.set()
             return mock_subscription
 
         mock_strategy.subscribe = AsyncMock(side_effect=capture_subscribe)
@@ -816,8 +818,8 @@ class TestInboxWaitForEmail:
         # Start wait_for_email with a short timeout
         task = asyncio.create_task(inbox.wait_for_email(WaitForEmailOptions(timeout=5000)))
 
-        # Give the task a moment to set up
-        await asyncio.sleep(0.01)
+        # Wait for callback to be captured (event-based, not time-based)
+        await asyncio.wait_for(callback_captured.wait(), timeout=5.0)
 
         # Simulate a new email arriving that matches the filter
         # This exercises lines 180-181 (matches_filter check and set_result)

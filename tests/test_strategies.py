@@ -306,18 +306,21 @@ class TestPollingStrategyBehavior:
         """Polling detects new emails via hash change."""
         mock_api_client = MagicMock()
 
-        # Track sync status calls
+        # Track sync status calls with event signaling
         sync_call_count = 0
+        done_event = asyncio.Event()
 
         async def mock_get_sync_status(*args, **kwargs):
             nonlocal sync_call_count
             sync_call_count += 1
+            if sync_call_count >= 2:
+                done_event.set()
             return MagicMock(emails_hash=f"hash{sync_call_count}")
 
         mock_api_client.get_sync_status = AsyncMock(side_effect=mock_get_sync_status)
         mock_api_client.list_emails = AsyncMock(return_value=[])
 
-        strategy = PollingStrategy(mock_api_client, PollingConfig(initial_interval=50))
+        strategy = PollingStrategy(mock_api_client, PollingConfig(initial_interval=1))
         mock_inbox = MagicMock()
         mock_inbox.email_address = "test@example.com"
         mock_inbox.inbox_hash = "inbox-hash"
@@ -325,8 +328,8 @@ class TestPollingStrategyBehavior:
         callback = MagicMock()
         await strategy.subscribe(mock_inbox, callback)
 
-        # Wait briefly for polling to execute multiple times
-        await asyncio.sleep(0.2)
+        # Wait for polling to execute multiple times (event-based, not time-based)
+        await asyncio.wait_for(done_event.wait(), timeout=5.0)
 
         await strategy.close()
 
@@ -440,11 +443,21 @@ class TestPollingStrategyBackoff:
         mock_api_client = MagicMock()
 
         # Return the same hash every time to trigger backoff increase
-        mock_api_client.get_sync_status = AsyncMock(return_value=MagicMock(emails_hash="same-hash"))
+        done_event = asyncio.Event()
+        call_count = 0
+
+        async def mock_get_sync_status(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count >= 2:
+                done_event.set()
+            return MagicMock(emails_hash="same-hash")
+
+        mock_api_client.get_sync_status = AsyncMock(side_effect=mock_get_sync_status)
         mock_api_client.list_emails = AsyncMock(return_value=[])
 
         config = PollingConfig(
-            initial_interval=10,  # Very short for testing
+            initial_interval=1,  # Very short for testing
             max_backoff=100,
             backoff_multiplier=2.0,
             jitter_factor=0,  # No jitter for predictable testing
@@ -456,13 +469,13 @@ class TestPollingStrategyBackoff:
 
         await strategy.subscribe(mock_inbox, MagicMock())
 
-        # Wait for multiple polling cycles
-        await asyncio.sleep(0.15)
+        # Wait for multiple polling cycles (event-based)
+        await asyncio.wait_for(done_event.wait(), timeout=5.0)
 
         await strategy.close()
 
         # Verify sync status was called multiple times (backoff is working)
-        assert mock_api_client.get_sync_status.call_count >= 2
+        assert call_count >= 2
 
     @pytest.mark.asyncio
     async def test_polling_handles_error_with_backoff(self) -> None:
@@ -471,19 +484,21 @@ class TestPollingStrategyBackoff:
 
         # First call raises an error, subsequent calls succeed
         call_count = 0
+        done_event = asyncio.Event()
 
         async def mock_get_sync_status(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
                 raise Exception("Network error")
+            done_event.set()
             return MagicMock(emails_hash="hash1")
 
         mock_api_client.get_sync_status = AsyncMock(side_effect=mock_get_sync_status)
         mock_api_client.list_emails = AsyncMock(return_value=[])
 
         config = PollingConfig(
-            initial_interval=10,
+            initial_interval=1,
             max_backoff=50,
             backoff_multiplier=2.0,
             jitter_factor=0,
@@ -495,8 +510,8 @@ class TestPollingStrategyBackoff:
 
         await strategy.subscribe(mock_inbox, MagicMock())
 
-        # Wait for polling to execute and recover from error
-        await asyncio.sleep(0.15)
+        # Wait for polling to execute and recover from error (event-based)
+        await asyncio.wait_for(done_event.wait(), timeout=5.0)
 
         await strategy.close()
 
@@ -529,7 +544,7 @@ class TestPollingStrategyProcessNewEmails:
         )
 
         config = PollingConfig(
-            initial_interval=10,
+            initial_interval=1,
             jitter_factor=0,
         )
         strategy = PollingStrategy(mock_api_client, config)
@@ -539,11 +554,13 @@ class TestPollingStrategyProcessNewEmails:
         mock_inbox.server_sig_pk = "test-pk"
         mock_inbox._keypair = MagicMock()
 
-        # Use an async callback
-        callback_emails = []
+        # Use an async callback with event signaling
+        callback_emails: list = []
+        done_event = asyncio.Event()
 
         async def async_callback(email):
             callback_emails.append(email)
+            done_event.set()
 
         # Mock Email._from_response
         from unittest.mock import patch
@@ -555,8 +572,8 @@ class TestPollingStrategyProcessNewEmails:
 
             await strategy.subscribe(mock_inbox, async_callback)
 
-            # Wait for polling to process emails
-            await asyncio.sleep(0.1)
+            # Wait for polling to process emails (event-based)
+            await asyncio.wait_for(done_event.wait(), timeout=5.0)
 
             await strategy.close()
 
@@ -569,10 +586,14 @@ class TestPollingStrategyProcessNewEmails:
         mock_api_client = MagicMock()
 
         call_count = 0
+        # Event to signal when we've had enough poll cycles to verify behavior
+        polls_done = asyncio.Event()
 
         async def mock_get_sync_status(*args, **kwargs):
             nonlocal call_count
             call_count += 1
+            if call_count >= 3:  # After 3 polls, we can verify the callback was only called once
+                polls_done.set()
             return MagicMock(emails_hash=f"hash{call_count}")
 
         mock_api_client.get_sync_status = AsyncMock(side_effect=mock_get_sync_status)
@@ -583,7 +604,7 @@ class TestPollingStrategyProcessNewEmails:
         )
 
         config = PollingConfig(
-            initial_interval=10,
+            initial_interval=1,
             jitter_factor=0,
         )
         strategy = PollingStrategy(mock_api_client, config)
@@ -608,20 +629,14 @@ class TestPollingStrategyProcessNewEmails:
 
             await strategy.subscribe(mock_inbox, sync_callback)
 
-            # Wait for first poll cycle
-            await asyncio.sleep(0.05)
-
-            # Get initial callback count
-            initial_count = callback_count
-
-            # Wait for more poll cycles
-            await asyncio.sleep(0.1)
+            # Wait for multiple poll cycles (event-based)
+            await asyncio.wait_for(polls_done.wait(), timeout=5.0)
 
             await strategy.close()
 
         # Callback should only have been called once for the same email
         # because subsequent polls should skip the already-seen email
-        assert callback_count == initial_count
+        assert callback_count == 1
 
     @pytest.mark.asyncio
     async def test_process_new_emails_handles_callback_error(self) -> None:
@@ -629,10 +644,13 @@ class TestPollingStrategyProcessNewEmails:
         mock_api_client = MagicMock()
 
         call_count = 0
+        done_event = asyncio.Event()
 
         async def mock_get_sync_status(*args, **kwargs):
             nonlocal call_count
             call_count += 1
+            if call_count >= 2:
+                done_event.set()
             return MagicMock(emails_hash=f"hash{call_count}")
 
         mock_api_client.get_sync_status = AsyncMock(side_effect=mock_get_sync_status)
@@ -643,7 +661,7 @@ class TestPollingStrategyProcessNewEmails:
         )
 
         config = PollingConfig(
-            initial_interval=10,
+            initial_interval=1,
             jitter_factor=0,
         )
         strategy = PollingStrategy(mock_api_client, config)
@@ -667,8 +685,8 @@ class TestPollingStrategyProcessNewEmails:
             # Should not raise even though callback raises
             await strategy.subscribe(mock_inbox, error_callback)
 
-            # Wait for polling
-            await asyncio.sleep(0.05)
+            # Wait for polling (event-based)
+            await asyncio.wait_for(done_event.wait(), timeout=5.0)
 
             # Close should complete without error
             await strategy.close()
@@ -693,7 +711,7 @@ class TestPollingStrategyProcessNewEmails:
         )
 
         config = PollingConfig(
-            initial_interval=10,
+            initial_interval=1,
             jitter_factor=0,
         )
         strategy = PollingStrategy(mock_api_client, config)
@@ -703,11 +721,13 @@ class TestPollingStrategyProcessNewEmails:
         mock_inbox.server_sig_pk = "test-pk"
         mock_inbox._keypair = MagicMock()
 
-        # Use a synchronous callback
-        sync_callback_emails = []
+        # Use a synchronous callback with event signaling
+        sync_callback_emails: list = []
+        done_event = asyncio.Event()
 
         def sync_callback(email):
             sync_callback_emails.append(email)
+            done_event.set()
 
         from unittest.mock import patch
 
@@ -718,8 +738,8 @@ class TestPollingStrategyProcessNewEmails:
 
             await strategy.subscribe(mock_inbox, sync_callback)
 
-            # Wait for polling to process emails
-            await asyncio.sleep(0.05)
+            # Wait for polling to process emails (event-based)
+            await asyncio.wait_for(done_event.wait(), timeout=5.0)
 
             await strategy.close()
 
@@ -854,6 +874,57 @@ class TestSSEStrategyUnsubscribeTimeout:
 
         # Verify subscription was removed
         assert "test1@example.com" not in strategy._subscriptions
+
+        await strategy.close()
+
+    @pytest.mark.asyncio
+    async def test_unsubscribe_sync_failure_logs_debug(self) -> None:
+        """Test unsubscribe handles sync failure gracefully (lines 141-143)."""
+        from unittest.mock import patch
+
+        mock_api_client = MagicMock()
+        mock_api_client.config = MagicMock()
+        mock_api_client.config.base_url = "https://example.com"
+        mock_api_client.config.api_key = "test-key"
+
+        strategy = SSEStrategy(mock_api_client)
+
+        # Add two subscriptions
+        mock_inbox1 = MagicMock()
+        mock_inbox1.email_address = "test1@example.com"
+        mock_inbox1.inbox_hash = "test-hash-1"
+
+        mock_inbox2 = MagicMock()
+        mock_inbox2.email_address = "test2@example.com"
+        mock_inbox2.inbox_hash = "test-hash-2"
+
+        subscription1 = Subscription(inbox=mock_inbox1, callback=lambda e: None)
+        subscription2 = Subscription(inbox=mock_inbox2, callback=lambda e: None)
+
+        strategy._subscriptions["test1@example.com"] = subscription1
+        strategy._subscriptions["test2@example.com"] = subscription2
+        strategy._inbox_hash_map["test-hash-1"] = "test1@example.com"
+        strategy._inbox_hash_map["test-hash-2"] = "test2@example.com"
+
+        # Mock reconnect to set connected event immediately
+        async def mock_reconnect():
+            strategy._connected_event = asyncio.Event()
+            strategy._connected_event.set()
+
+        strategy._reconnect_sse = mock_reconnect
+
+        # Mock _sync_subscriptions to raise an exception directly
+        async def mock_sync_fail(subs):
+            raise Exception("Sync subscriptions failed")
+
+        with patch.object(strategy, "_sync_subscriptions", side_effect=mock_sync_fail):
+            # Should not raise even when sync fails - unsubscribe should complete
+            await strategy.unsubscribe(subscription1)
+
+        # Verify subscription was removed despite sync failure
+        assert "test1@example.com" not in strategy._subscriptions
+        # Second subscription should remain
+        assert "test2@example.com" in strategy._subscriptions
 
         await strategy.close()
 
@@ -1070,6 +1141,56 @@ class TestSSEConnectAndListenEarlyReturn:
         await strategy._connect_and_listen()
 
         assert strategy._client is None
+
+    @pytest.mark.asyncio
+    async def test_connect_closes_existing_client(self) -> None:
+        """Test _connect_and_listen closes existing client before creating new (line 237)."""
+        from unittest.mock import patch
+
+        mock_api_client = MagicMock()
+        mock_api_client.config = MagicMock()
+        mock_api_client.config.base_url = "https://example.com"
+        mock_api_client.config.api_key = "test-key"
+
+        strategy = SSEStrategy(mock_api_client)
+
+        # Add a subscription
+        mock_inbox = MagicMock()
+        mock_inbox.email_address = "test@example.com"
+        mock_inbox.inbox_hash = "test-hash"
+        subscription = Subscription(inbox=mock_inbox, callback=lambda e: None)
+        strategy._subscriptions["test@example.com"] = subscription
+        strategy._inbox_hash_map["test-hash"] = "test@example.com"
+
+        # Set up an existing client that should be closed
+        existing_client = AsyncMock()
+        strategy._client = existing_client
+
+        strategy._connected_event = asyncio.Event()
+
+        # Mock SSE connection
+        async def empty_iter():
+            return
+            yield  # Make it a generator
+
+        mock_event_source = MagicMock()
+        mock_event_source.aiter_sse = empty_iter
+
+        @contextlib.asynccontextmanager
+        async def mock_aconnect_sse(*args, **kwargs):
+            yield mock_event_source
+
+        with (
+            patch("httpx.AsyncClient"),
+            patch(
+                "vaultsandbox.strategies.sse_strategy.aconnect_sse",
+                mock_aconnect_sse,
+            ),
+        ):
+            await strategy._connect_and_listen()
+
+        # Verify the existing client was closed
+        existing_client.aclose.assert_called_once()
 
 
 class TestSSEHandleEvent:

@@ -53,6 +53,16 @@ class TestVerifyWebhookSignatureValidation:
 
         assert "Invalid timestamp format" in str(exc_info.value)
 
+    def test_invalid_utf8_bytes_raises_error(self) -> None:
+        """Test that invalid UTF-8 bytes in body raises error (lines 78-79)."""
+        # Create invalid UTF-8 bytes (0xff 0xfe is not valid UTF-8)
+        invalid_bytes = b"\xff\xfe invalid utf-8"
+
+        with pytest.raises(WebhookSignatureVerificationError) as exc_info:
+            verify_webhook_signature(invalid_bytes, "sha256=abc", "123456", "secret")
+
+        assert "Invalid UTF-8 encoding" in str(exc_info.value)
+
     def test_signature_without_prefix(self) -> None:
         """Test that signature without sha256= prefix works (line 95)."""
         secret = "whsec_test_secret"

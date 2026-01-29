@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is inspired by [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.9.2] - 2026-01-29
+
+### Changed
+
+- Tests now run in parallel with pytest-xdist (~3x faster)
+- Replaced time-based sleeps with event-based synchronization in tests
+
 ## [0.9.1] - 2026-01-26
 
 ### Changed
