@@ -354,6 +354,7 @@ class VaultSandboxClient:
             email_auth=options.email_auth,
             encryption=options.encryption,
             spam_analysis=options.spam_analysis,
+            persistence=options.persistence,
             chaos=options.chaos,
         )
 
@@ -367,6 +368,7 @@ class VaultSandboxClient:
             encrypted=inbox_data.encrypted,
             server_sig_pk=inbox_data.server_sig_pk,
             email_auth=inbox_data.email_auth,
+            persistent=inbox_data.persistent,
             _keypair=keypair,
             _api_client=self._api_client,
             _strategy=self._strategy,
@@ -468,6 +470,7 @@ class VaultSandboxClient:
             "inboxHash": exported.inbox_hash,
             "encrypted": exported.encrypted,
             "emailAuth": exported.email_auth,
+            "persistent": exported.persistent,
             "exportedAt": exported.exported_at,
         }
 
@@ -542,6 +545,7 @@ class VaultSandboxClient:
             encrypted=data.encrypted,
             server_sig_pk=data.server_sig_pk,
             email_auth=data.email_auth,
+            persistent=data.persistent,
             _keypair=keypair,
             _api_client=self._api_client,
             _strategy=self._strategy,
@@ -582,6 +586,7 @@ class VaultSandboxClient:
                 exported_at=data.get("exportedAt", ""),
                 server_sig_pk=data.get("serverSigPk"),  # Optional for plain inboxes
                 secret_key=data.get("secretKey"),  # Optional for plain inboxes
+                persistent=data.get("persistent", False),  # Default to False for backwards compat
             )
         except KeyError as e:
             raise InvalidImportDataError(f"Missing required field in import file: {e}") from e

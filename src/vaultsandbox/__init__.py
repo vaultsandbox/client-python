@@ -89,7 +89,9 @@ from .types import (
     GreylistTrackBy,
     InboxData,
     InboxEncryptionMode,
+    InboxPersistenceMode,
     LatencyConfig,
+    PersistencePolicy,
     PollingConfig,
     RandomErrorConfig,
     RandomErrorType,
@@ -125,7 +127,7 @@ from .utils import (
 )
 from .webhook import Webhook
 
-__version__ = "0.9.2"
+__version__ = "0.9.3"
 
 __all__ = [
     # Main classes
@@ -151,6 +153,8 @@ __all__ = [
     "DeliveryStrategyType",
     "EncryptionPolicy",
     "InboxEncryptionMode",
+    "InboxPersistenceMode",
+    "PersistencePolicy",
     "PollingConfig",
     "SSEConfig",
     "WaitForCountOptions",

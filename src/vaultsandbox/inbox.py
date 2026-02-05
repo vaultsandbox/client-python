@@ -50,6 +50,7 @@ class Inbox:
         encrypted: Whether the inbox uses encryption.
         server_sig_pk: Server signing public key for verification (only for encrypted inboxes).
         email_auth: Whether email authentication checks are enabled.
+        persistent: Whether the inbox is persistent (survives server restarts).
     """
 
     email_address: str
@@ -60,6 +61,7 @@ class Inbox:
     encrypted: bool = True
     server_sig_pk: str | None = None
     email_auth: bool = True
+    persistent: bool = False
     _keypair: Keypair | None = field(default=None, repr=False)
     _subscriptions: list[Subscription] = field(default_factory=list, repr=False)
 
@@ -383,6 +385,7 @@ class Inbox:
             exported_at=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             server_sig_pk=self.server_sig_pk,
             secret_key=secret_key,
+            persistent=self.persistent,
         )
 
     # Webhook methods

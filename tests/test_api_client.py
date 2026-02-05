@@ -316,6 +316,35 @@ class TestCreateInbox:
         assert "json" in captured_kwargs
         assert captured_kwargs["json"]["spamAnalysis"] is True
 
+    @pytest.mark.asyncio
+    async def test_create_inbox_with_persistence_parameter(self, api_client: ApiClient) -> None:
+        """Test that persistence parameter is passed to API request body."""
+        captured_kwargs: dict = {}
+
+        async def mock_request(*args, **kwargs):
+            captured_kwargs.update(kwargs)
+            return httpx.Response(
+                200,
+                json={
+                    "emailAddress": "test@example.com",
+                    "expiresAt": "2025-01-01T00:00:00Z",
+                    "inboxHash": "test-hash",
+                    "encrypted": True,
+                    "persistent": True,
+                },
+            )
+
+        mock_client = MagicMock()
+        mock_client.is_closed = False
+        mock_client.request = mock_request
+        api_client._client = mock_client
+
+        result = await api_client.create_inbox(persistence="persistent")
+
+        assert "json" in captured_kwargs
+        assert captured_kwargs["json"]["persistence"] == "persistent"
+        assert result.persistent is True
+
 
 class TestWebhookLimitError:
     """Tests for webhook limit reached error handling (lines 194-195)."""

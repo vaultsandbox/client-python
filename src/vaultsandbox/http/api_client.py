@@ -32,6 +32,7 @@ from ..types import (
     GreylistConfig,
     InboxData,
     InboxEncryptionMode,
+    InboxPersistenceMode,
     LatencyConfig,
     RandomErrorConfig,
     RawEmailResponse,
@@ -166,6 +167,7 @@ class ApiClient:
         email_auth: bool | None = None,
         encryption: InboxEncryptionMode | None = None,
         spam_analysis: bool | None = None,
+        persistence: InboxPersistenceMode | None = None,
         chaos: ChaosConfig | None = None,
     ) -> InboxData:
         """Create a new inbox.
@@ -178,6 +180,7 @@ class ApiClient:
             email_auth: Enable/disable email authentication checks. None uses server default.
             encryption: Encryption mode ('encrypted' or 'plain'). None uses server default.
             spam_analysis: Enable/disable spam analysis. None uses server default.
+            persistence: Persistence mode ('persistent' or 'ephemeral'). None uses server default.
             chaos: Initial chaos configuration. Requires chaos to be enabled globally.
 
         Returns:
@@ -190,6 +193,7 @@ class ApiClient:
             email_auth=email_auth,
             encryption=encryption,
             spam_analysis=spam_analysis,
+            persistence=persistence,
             chaos=chaos,
         )
 

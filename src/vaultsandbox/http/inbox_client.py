@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, cast
 
-from ..types import ChaosConfig, InboxData, InboxEncryptionMode, SyncStatus
+from ..types import ChaosConfig, InboxData, InboxEncryptionMode, InboxPersistenceMode, SyncStatus
 from .base_client import BaseApiClient, encode_path_segment
 
 if TYPE_CHECKING:
@@ -43,6 +43,7 @@ class InboxApiClient(BaseApiClient):
         email_auth: bool | None = None,
         encryption: InboxEncryptionMode | None = None,
         spam_analysis: bool | None = None,
+        persistence: InboxPersistenceMode | None = None,
         chaos: ChaosConfig | None = None,
     ) -> InboxData:
         """Create a new inbox.
@@ -55,6 +56,7 @@ class InboxApiClient(BaseApiClient):
             email_auth: Enable/disable email authentication checks. None uses server default.
             encryption: Encryption mode ('encrypted' or 'plain'). None uses server default.
             spam_analysis: Enable/disable spam analysis. None uses server default.
+            persistence: Persistence mode ('persistent' or 'ephemeral'). None uses server default.
             chaos: Initial chaos configuration. Requires chaos to be enabled globally.
 
         Returns:
@@ -73,6 +75,8 @@ class InboxApiClient(BaseApiClient):
             body["encryption"] = encryption
         if spam_analysis is not None:
             body["spamAnalysis"] = spam_analysis
+        if persistence is not None:
+            body["persistence"] = persistence
         if chaos is not None:
             body["chaos"] = self._serialize_chaos_config(chaos)
 
@@ -85,6 +89,7 @@ class InboxApiClient(BaseApiClient):
             encrypted=data.get("encrypted", True),  # Default to True for backwards compat
             email_auth=data.get("emailAuth", False),
             server_sig_pk=data.get("serverSigPk"),  # Optional, only present when encrypted
+            persistent=data.get("persistent", False),
         )
 
     async def delete_inbox(self, email_address: str) -> None:

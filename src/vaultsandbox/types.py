@@ -12,6 +12,9 @@ from typing import Any, Literal, TypedDict
 # Encryption policy values
 EncryptionPolicy = Literal["always", "enabled", "disabled", "never"]
 
+# Persistence policy values
+PersistencePolicy = Literal["always", "enabled", "disabled", "never"]
+
 
 class DeliveryStrategyType(str, Enum):
     """Delivery strategy types."""
@@ -46,6 +49,9 @@ class ClientConfig:
 # Inbox encryption mode values
 InboxEncryptionMode = Literal["encrypted", "plain"]
 
+# Inbox persistence mode values
+InboxPersistenceMode = Literal["persistent", "ephemeral"]
+
 
 @dataclass
 class CreateInboxOptions:
@@ -63,6 +69,10 @@ class CreateInboxOptions:
             - None: Use server default
             - True: Enable spam analysis
             - False: Disable spam analysis
+        persistence: Persistence mode for the inbox ('persistent' or 'ephemeral').
+            - None: Use server default based on persistence policy
+            - 'persistent': Request persistent inbox (requires policy to allow)
+            - 'ephemeral': Request ephemeral inbox (requires policy to allow)
         chaos: Initial chaos configuration for this inbox.
             Requires chaos to be enabled globally on the server.
     """
@@ -72,6 +82,7 @@ class CreateInboxOptions:
     email_auth: bool | None = None
     encryption: InboxEncryptionMode | None = None
     spam_analysis: bool | None = None
+    persistence: InboxPersistenceMode | None = None
     chaos: ChaosConfig | None = None
 
 
@@ -90,6 +101,8 @@ class ServerInfo:
         encryption_policy: Server encryption policy ('always', 'enabled', 'disabled', 'never').
         spam_analysis_enabled: Whether spam analysis (Rspamd) is enabled on this server.
         chaos_enabled: Whether chaos engineering is enabled globally on this server.
+        persistence_policy: Server persistence policy ('always', 'enabled', 'disabled', 'never').
+        persistent_global_webhooks: Whether global webhooks are persisted.
     """
 
     server_sig_pk: str
@@ -102,6 +115,8 @@ class ServerInfo:
     encryption_policy: EncryptionPolicy = "always"
     spam_analysis_enabled: bool = False
     chaos_enabled: bool = False
+    persistence_policy: PersistencePolicy = "disabled"
+    persistent_global_webhooks: bool = False
 
 
 @dataclass
@@ -160,6 +175,7 @@ class InboxData:
         encrypted: Whether the inbox uses encryption.
         server_sig_pk: Server signing public key for verification (only present when encrypted).
         email_auth: Whether email authentication checks are enabled.
+        persistent: Whether the inbox is persistent (survives server restarts).
     """
 
     email_address: str
@@ -168,6 +184,7 @@ class InboxData:
     encrypted: bool
     email_auth: bool
     server_sig_pk: str | None = None
+    persistent: bool = False
 
 
 @dataclass
@@ -181,6 +198,7 @@ class ExportedInbox:
     - inboxHash: Unique inbox identifier
     - encrypted: Whether the inbox uses encryption
     - emailAuth: Whether email authentication checks are enabled
+    - persistent: Whether the inbox is persistent
     - serverSigPk: Server's ML-DSA-65 public key (base64url) - only for encrypted inboxes
     - secretKey: ML-KEM-768 secret key (base64url, 2400 bytes decoded) - only for encrypted inboxes
     - exportedAt: Export timestamp (ISO 8601)
@@ -197,6 +215,7 @@ class ExportedInbox:
         exported_at: ISO 8601 timestamp when the inbox was exported.
         server_sig_pk: Server signing public key (base64url encoded) - only for encrypted inboxes.
         secret_key: ML-KEM-768 secret key (base64url encoded) - only for encrypted inboxes.
+        persistent: Whether the inbox is persistent (survives server restarts).
     """
 
     version: int
@@ -208,6 +227,7 @@ class ExportedInbox:
     exported_at: str
     server_sig_pk: str | None = None
     secret_key: str | None = None
+    persistent: bool = False
 
 
 # SPF status values
