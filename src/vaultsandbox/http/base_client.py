@@ -18,7 +18,7 @@ from ..errors import (
     WebhookLimitReachedError,
     WebhookNotFoundError,
 )
-from ..types import ClientConfig, EncryptionPolicy, ServerInfo
+from ..types import ClientConfig, EncryptionPolicy, PersistencePolicy, ServerInfo
 
 # More robust patterns for error classification
 _INBOX_NOT_FOUND_PATTERN = re.compile(r"\binbox\b.*\b(not found|does not exist)\b", re.IGNORECASE)
@@ -202,6 +202,8 @@ class BaseApiClient:
         data = response.json()
         # Default to 'always' if not specified (backwards compatibility)
         encryption_policy: EncryptionPolicy = data.get("encryptionPolicy", "always")
+        # Default to 'disabled' if not specified (backwards compatibility)
+        persistence_policy: PersistencePolicy = data.get("persistencePolicy", "disabled")
         return ServerInfo(
             server_sig_pk=data["serverSigPk"],
             algs=data["algs"],
@@ -213,4 +215,6 @@ class BaseApiClient:
             encryption_policy=encryption_policy,
             spam_analysis_enabled=data.get("spamAnalysisEnabled", False),
             chaos_enabled=data.get("chaosEnabled", False),
+            persistence_policy=persistence_policy,
+            persistent_global_webhooks=data.get("persistentGlobalWebhooks", False),
         )
